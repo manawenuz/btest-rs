@@ -678,12 +678,11 @@ async fn run_udp_test_server(
     // (base_port, base_port+1, ..., base_port+N-1) all to our single server port.
     // A connect()'d UDP socket only accepts from the one connected address,
     // silently dropping packets from the other ports.
-    // So: only connect() for single-connection mode (enables send() without addr).
-    // For multi-connection, we leave the socket unconnected and use send_to()/recv_from().
-    // Don't connect() UDP socket when:
-    // - Multi-connection mode (MikroTik sends from multiple source ports)
-    // - IPv6 (macOS connected IPv6 UDP sockets have receive issues)
-    let use_unconnected = cmd.tcp_conn_count > 0 || peer.is_ipv6();
+    // Only use unconnected socket for multi-connection mode (MikroTik sends
+    // from multiple source ports). For single-connection, always connect() —
+    // this is critical for IPv6 where send_to() hits ENOBUFS but send() works.
+    // recv_from() works fine on connected sockets for single source.
+    let use_unconnected = cmd.tcp_conn_count > 0;
     if !use_unconnected {
         udp.connect(client_udp_addr).await?;
     }
