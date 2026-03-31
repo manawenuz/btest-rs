@@ -637,9 +637,14 @@ async fn run_udp_test_server(
         server_udp_port, client_udp_port, peer,
     );
 
-    let udp = UdpSocket::bind(format!("0.0.0.0:{}", server_udp_port)).await?;
-    let client_udp_addr: SocketAddr =
-        format!("{}:{}", peer.ip(), client_udp_port).parse().unwrap();
+    // Bind UDP on the same address family as the peer
+    let bind_addr: SocketAddr = if peer.is_ipv6() {
+        format!("[::]:{}",  server_udp_port).parse().unwrap()
+    } else {
+        format!("0.0.0.0:{}", server_udp_port).parse().unwrap()
+    };
+    let udp = UdpSocket::bind(bind_addr).await?;
+    let client_udp_addr = SocketAddr::new(peer.ip(), client_udp_port);
 
     // When connection_count > 1, MikroTik sends UDP from MULTIPLE source ports
     // (base_port, base_port+1, ..., base_port+N-1) all to our single server port.
