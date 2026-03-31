@@ -1,0 +1,22 @@
+services:
+  btest-server:
+    build: .
+    container_name: btest-server
+    ports:
+      - "2000:2000/tcp"
+      - "2001-2100:2001-2100/udp"
+      - "2257-2356:2257-2356/udp"
+    command: ["-s", "-v"]
+    restart: unless-stopped
+
+  # Server with authentication enabled
+  btest-server-auth:
+    build: .
+    container_name: btest-server-auth
+    ports:
+      - "2010:2000/tcp"
+      - "2101-2200:2001-2100/udp"
+    command: ["-s", "-a", "admin", "-p", "password", "-v"]
+    restart: unless-stopped
+    profiles:
+      - auth

@@ -1,0 +1,32 @@
+[package]
+name = "mikrotik-btest"
+version = "0.1.0"
+edition = "2021"
+description = "MikroTik Bandwidth Test (btest) server and client implementation in Rust"
+license = "MIT"
+
+[lib]
+name = "mikrotik_btest"
+path = "src/lib.rs"
+
+[[bin]]
+name = "btest"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+clap = { version = "4", features = ["derive"] }
+md-5 = "0.10"
+bytes = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rand = "0.8"
+socket2 = "0.5"
+anyhow = "1.0.102"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
+codegen-units = 1
