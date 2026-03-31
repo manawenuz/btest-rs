@@ -116,8 +116,10 @@ btest -s -vv     # info + debug + trace (hex dumps of status exchange)
 
 ### Run btest from MikroTik (connecting to our server)
 
+**Important: Set Connection Count to 1** — multi-connection mode is not supported.
+
 ```
-/tool/bandwidth-test address=<server-ip> direction=both protocol=udp user=admin password=password
+/tool/bandwidth-test address=<server-ip> direction=both protocol=udp user=admin password=password connection-count=1
 ```
 
 ## Protocol
@@ -133,7 +135,7 @@ See the [original protocol documentation](btest-opensource/README.md) for wire-f
 ## Known Limitations
 
 - **EC-SRP5 authentication** (RouterOS >= 6.43) is not yet supported for client mode. Server mode works fine with MD5 auth. Disable auth on the MikroTik btest server as a workaround.
-- **Multi-connection mode** (`Connection Count > 1` on MikroTik client) causes MikroTik's per-connection speed adaptation to throttle each stream independently, resulting in lower aggregate throughput. Use 1 connection for best results.
+- **Connection Count must be 1** when MikroTik connects to this server. Multi-connection mode (`Connection Count > 1`) is not properly supported and will result in severely degraded throughput. Always set `Connection Count = 1` on the MikroTik client. Single-connection performance is excellent (1+ Gbps).
 
 ## Testing
 

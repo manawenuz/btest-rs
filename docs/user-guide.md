@@ -45,17 +45,16 @@ btest -s -vv     # Show hex dumps of status exchange (for debugging)
 
 ### MikroTik Configuration (connecting to our server)
 
+**Important: Always set Connection Count to 1.** Multi-connection mode is not supported and will cause severely degraded speeds.
+
 On the MikroTik device (WinBox or CLI):
 
 ```
-# CLI
-/tool/bandwidth-test address=<server-ip> direction=both protocol=udp user=admin password=mysecretpassword
-
-# For best results, use 1 connection
-/tool/bandwidth-test address=<server-ip> direction=both protocol=udp connection-count=1
+# CLI — always include connection-count=1
+/tool/bandwidth-test address=<server-ip> direction=both protocol=udp user=admin password=mysecretpassword connection-count=1
 ```
 
-Or via WinBox: **Tools → Bandwidth Test**, enter server address, credentials, and click Start.
+Or via WinBox: **Tools → Bandwidth Test**, enter server address, credentials, **set Connection Count to 1**, and click Start.
 
 ## Client Mode
 
@@ -169,7 +168,7 @@ Options:
 
 ## Tips
 
-- **Use 1 connection** when MikroTik connects to your server. Multi-connection mode causes MikroTik's per-connection speed adaptation to throttle.
+- **Connection Count MUST be 1** when MikroTik connects to your server. Multi-connection mode is not supported and will cause speeds to drop to near zero. Single-connection performance is excellent (1+ Gbps).
 - **TCP mode** generally gives more stable results than UDP due to TCP flow control.
 - **UDP mode** is better for measuring raw link capacity without TCP overhead.
 - **First interval** may show higher or lower numbers as the connection stabilizes. Look at intervals 3+ for steady-state throughput.
@@ -182,5 +181,6 @@ Options:
 | `EC-SRP5 authentication not supported` | Disable auth on MikroTik btest server, or use older RouterOS |
 | `Connection refused` | Check port 2000 is open, firewall allows it |
 | Server shows 0 RX | Check MikroTik is actually sending (direction setting) |
-| Speed drops over time (server mode) | MikroTik client behavior — use 1 connection, or use our client mode instead |
+| Speed drops over time (server mode) | Set Connection Count to 1 on MikroTik. Multi-connection is not supported |
+| Very low speed with multiple connections | Multi-connection mode is broken — set Connection Count to 1 |
 | UDP `lost` packets high | Network congestion or MTU issues, try reducing bandwidth with `-b` |
