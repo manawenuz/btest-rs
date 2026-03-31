@@ -644,6 +644,14 @@ async fn run_udp_test_server(
         format!("0.0.0.0:{}", server_udp_port).parse().unwrap()
     };
     let udp = UdpSocket::bind(bind_addr).await?;
+
+    // Enlarge send/receive buffers — IPv6 on macOS has small defaults
+    let std_sock = udp.into_std()?;
+    let sock2 = socket2::Socket::from(std_sock);
+    let _ = sock2.set_send_buffer_size(4 * 1024 * 1024); // 4MB
+    let _ = sock2.set_recv_buffer_size(4 * 1024 * 1024);
+    let udp = UdpSocket::from_std(sock2.into())?;
+
     let client_udp_addr = SocketAddr::new(peer.ip(), client_udp_port);
 
     // When connection_count > 1, MikroTik sends UDP from MULTIPLE source ports
