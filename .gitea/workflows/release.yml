@@ -14,14 +14,16 @@ jobs:
       - name: Install dependencies
         run: |
           apt-get update && apt-get install -y --no-install-recommends \
-            git curl jq ca-certificates \
+            git curl jq ca-certificates zip \
             musl-tools \
             gcc-aarch64-linux-gnu \
-            gcc-arm-linux-gnueabihf
+            gcc-arm-linux-gnueabihf \
+            gcc-mingw-w64-x86-64
           rustup target add \
             x86_64-unknown-linux-musl \
             aarch64-unknown-linux-musl \
-            armv7-unknown-linux-musleabihf
+            armv7-unknown-linux-musleabihf \
+            x86_64-pc-windows-gnu
 
       - name: Ensure code is present
         run: |
@@ -42,16 +44,22 @@ jobs:
           [target.armv7-unknown-linux-musleabihf]
           linker = "arm-linux-gnueabihf-gcc"
           rustflags = ["-C", "target-feature=+crt-static"]
+
+          [target.x86_64-pc-windows-gnu]
+          linker = "x86_64-w64-mingw32-gcc"
           TOML
 
-      - name: Build x86_64
+      - name: Build Linux x86_64
         run: cargo build --release --target x86_64-unknown-linux-musl
 
-      - name: Build aarch64
+      - name: Build Linux aarch64
         run: cargo build --release --target aarch64-unknown-linux-musl
 
-      - name: Build armv7
+      - name: Build Linux armv7
         run: cargo build --release --target armv7-unknown-linux-musleabihf
+
+      - name: Build Windows x86_64
+        run: cargo build --release --target x86_64-pc-windows-gnu
 
       - name: Package all
         run: |
@@ -69,8 +77,12 @@ jobs:
           tar czf /artifacts/btest-linux-armv7.tar.gz btest
           cd -
 
+          cd target/x86_64-pc-windows-gnu/release
+          zip /artifacts/btest-windows-x86_64.zip btest.exe
+          cd -
+
           cd /artifacts
-          sha256sum *.tar.gz > checksums-sha256.txt
+          sha256sum * > checksums-sha256.txt
           cat checksums-sha256.txt
           ls -lh
 
@@ -89,9 +101,10 @@ jobs:
           | Linux | x86_64 | btest-linux-x86_64.tar.gz |
           | Linux | aarch64 (RPi 64-bit) | btest-linux-aarch64.tar.gz |
           | Linux | armv7 (RPi 32-bit) | btest-linux-armv7.tar.gz |
-          | macOS | Build locally | cargo build --release |
+          | Windows | x86_64 | btest-windows-x86_64.zip |
+          | macOS | aarch64 / x86_64 | Build locally or download after manual upload |
 
-          ### Quick Install
+          ### Quick Install (Linux)
           curl -L <release-url>/btest-linux-x86_64.tar.gz | tar xz
           sudo mv btest /usr/local/bin/"
 
@@ -104,7 +117,7 @@ jobs:
 
           echo "Created release ID: ${RELEASE_ID}"
 
-          for file in /artifacts/*.tar.gz /artifacts/checksums-sha256.txt; do
+          for file in /artifacts/*.tar.gz /artifacts/*.zip /artifacts/checksums-sha256.txt; do
             FILENAME=$(basename "$file")
             echo "Uploading: ${FILENAME}"
             curl -sf -X POST \
