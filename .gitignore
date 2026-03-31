@@ -3,3 +3,5 @@
 btest_original
 .claude/
 .env
+proto-test/venv/
+**/__pycache__/

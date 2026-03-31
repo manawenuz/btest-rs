@@ -37,29 +37,45 @@ pub async fn run_client(
     send_command(&mut stream, &cmd).await?;
 
     let resp = recv_response(&mut stream).await?;
-    match (auth_user.as_deref(), auth_pass.as_deref()) {
-        (Some(user), Some(pass)) => {
-            auth::client_authenticate(&mut stream, resp, user, pass).await?;
-        }
-        _ => {
-            if resp == AUTH_REQUIRED {
+    if resp == AUTH_OK {
+        // No auth required
+    } else if resp == AUTH_REQUIRED {
+        // MD5 auth
+        match (auth_user.as_deref(), auth_pass.as_deref()) {
+            (Some(user), Some(pass)) => {
+                auth::client_authenticate(&mut stream, resp, user, pass).await?;
+            }
+            _ => {
                 return Err(BtestError::Protocol(
-                    "Server requires authentication but no credentials provided".into(),
+                    "Server requires authentication but no credentials provided (-a/-p)".into(),
                 ));
             }
-            if resp == [0x03, 0x00, 0x00, 0x00] {
+        }
+    } else if resp == [0x03, 0x00, 0x00, 0x00] {
+        // EC-SRP5 auth (RouterOS >= 6.43)
+        match (auth_user.as_deref(), auth_pass.as_deref()) {
+            (Some(user), Some(pass)) => {
+                crate::ecsrp5::client_authenticate(&mut stream, user, pass).await?;
+                // After EC-SRP5, server sends AUTH_OK
+                let post_auth = recv_response(&mut stream).await?;
+                if post_auth != AUTH_OK {
+                    return Err(BtestError::Protocol(format!(
+                        "Unexpected post-EC-SRP5 response: {:02x?}",
+                        post_auth
+                    )));
+                }
+            }
+            _ => {
                 return Err(BtestError::Protocol(
-                    "Server requires EC-SRP5 authentication (RouterOS >= 6.43) which is not yet supported. \
-                     Try disabling authentication on the MikroTik btest server, or provide -a/-p credentials".into(),
+                    "Server requires EC-SRP5 authentication. Provide credentials with -a/-p".into(),
                 ));
             }
-            if resp != AUTH_OK {
-                return Err(BtestError::Protocol(format!(
-                    "Unexpected server response: {:02x?}",
-                    resp
-                )));
-            }
         }
+    } else {
+        return Err(BtestError::Protocol(format!(
+            "Unexpected server response: {:02x?}",
+            resp
+        )));
     }
 
     tracing::info!(

@@ -26,9 +26,27 @@ pub async fn run_server(
     port: u16,
     auth_user: Option<String>,
     auth_pass: Option<String>,
+    use_ecsrp5: bool,
 ) -> Result<()> {
     let addr = format!("0.0.0.0:{}", port);
     let listener = TcpListener::bind(&addr).await?;
+
+    // Pre-derive EC-SRP5 credentials if enabled
+    let ecsrp5_creds = if use_ecsrp5 {
+        match (auth_user.as_deref(), auth_pass.as_deref()) {
+            (Some(user), Some(pass)) => {
+                tracing::info!("EC-SRP5 authentication enabled for user '{}'", user);
+                Some(Arc::new(crate::ecsrp5::EcSrp5Credentials::derive(user, pass)))
+            }
+            _ => {
+                tracing::warn!("--ecsrp5 requires -a and -p to be set");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     tracing::info!("btest server listening on {}", addr);
 
     let udp_port_offset = Arc::new(std::sync::atomic::AtomicU16::new(0));
@@ -42,10 +60,11 @@ pub async fn run_server(
         let auth_pass = auth_pass.clone();
         let udp_offset = udp_port_offset.clone();
         let sessions = sessions.clone();
+        let ecsrp5 = ecsrp5_creds.clone();
 
         tokio::spawn(async move {
             if let Err(e) =
-                handle_client(stream, peer, auth_user, auth_pass, udp_offset, sessions).await
+                handle_client(stream, peer, auth_user, auth_pass, udp_offset, sessions, ecsrp5).await
             {
                 tracing::error!("Client {} error: {}", peer, e);
             }
@@ -60,6 +79,7 @@ async fn handle_client(
     auth_pass: Option<String>,
     udp_port_offset: Arc<std::sync::atomic::AtomicU16>,
     sessions: SessionMap,
+    ecsrp5_creds: Option<Arc<crate::ecsrp5::EcSrp5Credentials>>,
 ) -> Result<()> {
     stream.set_nodelay(true)?;
 
@@ -182,13 +202,33 @@ async fn handle_client(
     }
 
     // Primary connection auth
-    auth::server_authenticate(
-        &mut stream,
-        auth_user.as_deref(),
-        auth_pass.as_deref(),
-        &ok_response,
-    )
-    .await?;
+    if let Some(ref creds) = ecsrp5_creds {
+        // EC-SRP5 authentication
+        let auth_resp: [u8; 4] = [0x03, 0x00, 0x00, 0x00];
+        stream.write_all(&auth_resp).await?;
+        stream.flush().await?;
+
+        crate::ecsrp5::server_authenticate(
+            &mut stream,
+            auth_user.as_deref().unwrap_or("admin"),
+            auth_pass.as_deref().unwrap_or(""),
+            creds,
+        )
+        .await?;
+
+        // Send auth OK (with session token if multi-conn)
+        stream.write_all(&ok_response).await?;
+        stream.flush().await?;
+    } else {
+        // MD5 or no auth
+        auth::server_authenticate(
+            &mut stream,
+            auth_user.as_deref(),
+            auth_pass.as_deref(),
+            &ok_response,
+        )
+        .await?;
+    }
 
     if cmd.is_udp() {
         run_udp_test_server(&mut stream, peer, &cmd, udp_port_offset).await

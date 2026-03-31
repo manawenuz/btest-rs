@@ -1,6 +1,7 @@
 mod auth;
 mod bandwidth;
 mod client;
+mod ecsrp5;
 mod protocol;
 mod server;
 
@@ -56,6 +57,10 @@ struct Cli {
     #[arg(short = 'p', long = "authpass")]
     auth_pass: Option<String>,
 
+    /// Use EC-SRP5 authentication (RouterOS >= 6.43 compatible)
+    #[arg(long = "ecsrp5")]
+    ecsrp5: bool,
+
     /// NAT mode - send probe packet to open firewall
     #[arg(short = 'n', long = "nat")]
     nat: bool,
@@ -85,7 +90,7 @@ async fn main() -> anyhow::Result<()> {
     if cli.server {
         // Server mode
         tracing::info!("Starting btest server on port {}", cli.port);
-        server::run_server(cli.port, cli.auth_user, cli.auth_pass).await?;
+        server::run_server(cli.port, cli.auth_user, cli.auth_pass, cli.ecsrp5).await?;
     } else if let Some(host) = cli.client {
         // Client mode - must specify at least one direction
         if !cli.transmit && !cli.receive {

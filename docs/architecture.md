@@ -50,12 +50,20 @@ sequenceDiagram
 
     alt No auth configured
         SRV->>TCP: AUTH_OK [01 00 00 00]
-    else MD5 auth
+    else MD5 auth (RouterOS < 6.43)
         SRV->>TCP: AUTH_REQUIRED [02 00 00 00]
         SRV->>TCP: Challenge [16 random bytes]
         MK->>TCP: Response [16 hash + 32 username]
         Note over SRV: Verify MD5(pass + MD5(pass + challenge))
         SRV->>TCP: AUTH_OK or AUTH_FAILED
+    else EC-SRP5 auth (RouterOS >= 6.43, --ecsrp5 flag)
+        SRV->>TCP: EC-SRP5 [03 00 00 00]
+        MK->>TCP: [len][username\0][client_pubkey:32][parity:1]
+        SRV->>TCP: [len][server_pubkey:32][parity:1][salt:16]
+        MK->>TCP: [len][client_proof:32]
+        SRV->>TCP: [len][server_proof:32]
+        Note over SRV: Curve25519 Weierstrass EC-SRP5<br/>See docs/ecsrp5-research.md
+        SRV->>TCP: AUTH_OK [01 00 00 00]
     end
 
     alt TCP mode
@@ -179,6 +187,7 @@ btest-rs/
 │   ├── lib.rs           # Public API (used by integration tests)
 │   ├── protocol.rs      # Wire format: Command, StatusMessage, constants
 │   ├── auth.rs          # MD5 challenge-response authentication
+│   ├── ecsrp5.rs        # EC-SRP5 authentication (Curve25519 Weierstrass)
 │   ├── server.rs        # Server mode: listener, TCP/UDP handlers
 │   ├── client.rs        # Client mode: connector, TCP/UDP handlers
 │   └── bandwidth.rs     # Rate limiting, formatting, shared state

@@ -132,9 +132,23 @@ The MikroTik btest protocol uses:
 
 See the [original protocol documentation](btest-opensource/README.md) for wire-format details.
 
+## Authentication
+
+Both MD5 (legacy) and EC-SRP5 (RouterOS >= 6.43) authentication are supported:
+
+```bash
+# Server with MD5 auth (legacy clients)
+btest -s -a admin -p password
+
+# Server with EC-SRP5 auth (modern RouterOS clients)
+btest -s -a admin -p password --ecsrp5
+
+# Client auto-detects auth type
+btest -c 192.168.88.1 -r -a admin -p password
+```
+
 ## Known Limitations
 
-- **EC-SRP5 authentication** (RouterOS >= 6.43) is not yet supported for client mode. Server mode works fine with MD5 auth. Disable auth on the MikroTik btest server as a workaround.
 - **Multi-connection UDP** is supported. MikroTik's multi-connection mode sends from multiple source ports which are all accepted by the server.
 
 ## Testing
@@ -148,8 +162,9 @@ scripts/test-docker.sh               # Docker container test
 
 ## Credits
 
-- **[btest-opensource](https://github.com/samm-git/btest-opensource)** by [Alex Samorukov](https://github.com/samm-git) - Original C implementation and protocol reverse-engineering that made this project possible. Licensed under MIT.
-- **MikroTik** - Creator of the bandwidth test protocol and RouterOS.
+- **[btest-opensource](https://github.com/samm-git/btest-opensource)** by [Alex Samorukov](https://github.com/samm-git) — Original C implementation and protocol reverse-engineering. Licensed under MIT.
+- **[Margin Research](https://github.com/MarginResearch/mikrotik_authentication)** — EC-SRP5 authentication reverse-engineering (Curve25519 Weierstrass, SRP key exchange). Licensed under Apache 2.0.
+- **MikroTik** — Creator of the bandwidth test protocol and RouterOS.
 
 ## License
 

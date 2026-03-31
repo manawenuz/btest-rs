@@ -3,7 +3,11 @@ MIT License
 Copyright (c) 2026 btest-rs contributors
 
 Based on btest-opensource by Alex Samorukov (https://github.com/samm-git/btest-opensource)
-Original work Copyright (c) 2016 Alex Samorukov
+Original work Copyright (c) 2016 Alex Samorukov (MIT License)
+
+EC-SRP5 authentication based on research by Margin Research
+(https://github.com/MarginResearch/mikrotik_authentication)
+Original work Copyright (c) 2022 Margin Research (Apache License 2.0)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -22,3 +26,10 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+NOTICE: This project includes code derived from works under the Apache License 2.0.
+The EC-SRP5 elliptic curve implementation is based on MarginResearch/mikrotik_authentication.
+See https://github.com/MarginResearch/mikrotik_authentication/blob/master/LICENSE
+for the full Apache 2.0 license text.

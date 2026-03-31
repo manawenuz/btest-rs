@@ -188,6 +188,7 @@ pub async fn send_command<W: AsyncWriteExt + Unpin>(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub async fn recv_command<R: AsyncReadExt + Unpin>(reader: &mut R) -> Result<Command> {
     let mut buf = [0u8; 16];
     reader.read_exact(&mut buf).await?;
