@@ -4,6 +4,7 @@ mod client;
 mod ecsrp5;
 mod protocol;
 mod server;
+pub mod syslog_logger;
 
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
@@ -65,6 +66,10 @@ struct Cli {
     #[arg(short = 'n', long = "nat")]
     nat: bool,
 
+    /// Send logs to remote syslog server (e.g., 192.168.1.1:514)
+    #[arg(long = "syslog")]
+    syslog: Option<String>,
+
     /// Verbose logging (repeat for more: -v, -vv, -vvv)
     #[arg(short = 'v', long = "verbose", action = clap::ArgAction::Count)]
     verbose: u8,
@@ -86,6 +91,13 @@ async fn main() -> anyhow::Result<()> {
         )
         .with_target(false)
         .init();
+
+    // Initialize syslog if requested
+    if let Some(ref syslog_addr) = cli.syslog {
+        if let Err(e) = syslog_logger::init(syslog_addr) {
+            eprintln!("Warning: failed to initialize syslog to {}: {}", syslog_addr, e);
+        }
+    }
 
     if cli.server {
         // Server mode

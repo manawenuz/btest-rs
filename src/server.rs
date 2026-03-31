@@ -66,7 +66,11 @@ pub async fn run_server(
             if let Err(e) =
                 handle_client(stream, peer, auth_user, auth_pass, udp_offset, sessions, ecsrp5).await
             {
-                tracing::error!("Client {} error: {}", peer, e);
+                let err_str = format!("{}", e);
+                tracing::error!("Client {} error: {}", peer, err_str);
+                if err_str.contains("uth") {
+                    crate::syslog_logger::auth_failure(&peer.to_string(), "-", "-", &err_str);
+                }
             }
         });
     }
@@ -229,7 +233,14 @@ async fn handle_client(
         .await?;
     }
 
-    if cmd.is_udp() {
+    // Log auth success and test start
+    let auth_type = if ecsrp5_creds.is_some() { "ecsrp5" } else if auth_user.is_some() { "md5" } else { "none" };
+    let proto_str = if cmd.is_udp() { "UDP" } else { "TCP" };
+    let dir_str = match cmd.direction { CMD_DIR_RX => "RX", CMD_DIR_TX => "TX", _ => "BOTH" };
+    crate::syslog_logger::auth_success(&peer.to_string(), auth_user.as_deref().unwrap_or("-"), auth_type);
+    crate::syslog_logger::test_start(&peer.to_string(), proto_str, dir_str, cmd.tcp_conn_count);
+
+    let result = if cmd.is_udp() {
         run_udp_test_server(&mut stream, peer, &cmd, udp_port_offset).await
     } else if is_tcp_multi {
         let conn_count = cmd.tcp_conn_count;
@@ -285,7 +296,10 @@ async fn handle_client(
         run_tcp_multiconn_server(all_streams, cmd).await
     } else {
         run_tcp_test_server(stream, cmd).await
-    }
+    };
+
+    crate::syslog_logger::test_end(&peer.to_string(), proto_str, dir_str);
+    result
 }
 
 // --- TCP Test Server ---
