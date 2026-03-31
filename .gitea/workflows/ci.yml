@@ -6,34 +6,19 @@ on:
   pull_request:
     branches: [main]
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
   test:
     runs_on: ubuntu-latest
     container:
       image: rust:1.86-slim
     steps:
-      - name: Install git
-        run: apt-get update && apt-get install -y --no-install-recommends git
-
-      - name: Checkout
-        run: |
-          git config --global --add safe.directory '*'
-          git clone --depth 1 --branch ${GITHUB_REF_NAME:-main} ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git .
-        working_directory: /workspace
-
       - name: Run tests
         run: cargo test -- --test-threads=1
-        working_directory: /workspace
 
       - name: Build release
         run: cargo build --release
-        working_directory: /workspace
 
       - name: Check binary
         run: |
           ls -lh target/release/btest
           target/release/btest --version
-        working_directory: /workspace

@@ -5,33 +5,24 @@ on:
     tags:
       - 'v*'
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
   build-linux-x86_64:
     runs_on: ubuntu-latest
     container:
       image: rust:1.86-slim
     steps:
-      - name: Install dependencies
+      - name: Install musl toolchain
         run: |
-          apt-get update && apt-get install -y --no-install-recommends git musl-tools
+          apt-get update && apt-get install -y --no-install-recommends musl-tools
           rustup target add x86_64-unknown-linux-musl
-
-      - name: Checkout
-        run: |
-          git config --global --add safe.directory '*'
-          git clone --depth 1 --branch ${GITHUB_REF_NAME} ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git /build
 
       - name: Build
         run: cargo build --release --target x86_64-unknown-linux-musl
-        working_directory: /build
 
       - name: Package
         run: |
           mkdir -p /artifacts
-          cd /build/target/x86_64-unknown-linux-musl/release
+          cd target/x86_64-unknown-linux-musl/release
           tar czf /artifacts/btest-linux-x86_64.tar.gz btest
           sha256sum /artifacts/btest-linux-x86_64.tar.gz > /artifacts/btest-linux-x86_64.tar.gz.sha256
 
@@ -46,20 +37,12 @@ jobs:
     container:
       image: rust:1.86-slim
     steps:
-      - name: Install dependencies
+      - name: Install cross toolchain
         run: |
-          apt-get update && apt-get install -y --no-install-recommends git gcc-aarch64-linux-gnu
+          apt-get update && apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu
           rustup target add aarch64-unknown-linux-musl
-
-      - name: Checkout
-        run: |
-          git config --global --add safe.directory '*'
-          git clone --depth 1 --branch ${GITHUB_REF_NAME} ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git /build
-
-      - name: Configure cross-linker
-        run: |
-          mkdir -p /build/.cargo
-          cat > /build/.cargo/config.toml << 'TOML'
+          mkdir -p .cargo
+          cat > .cargo/config.toml << 'TOML'
           [target.aarch64-unknown-linux-musl]
           linker = "aarch64-linux-gnu-gcc"
           rustflags = ["-C", "target-feature=+crt-static"]
@@ -67,12 +50,11 @@ jobs:
 
       - name: Build
         run: cargo build --release --target aarch64-unknown-linux-musl
-        working_directory: /build
 
       - name: Package
         run: |
           mkdir -p /artifacts
-          cd /build/target/aarch64-unknown-linux-musl/release
+          cd target/aarch64-unknown-linux-musl/release
           tar czf /artifacts/btest-linux-aarch64.tar.gz btest
           sha256sum /artifacts/btest-linux-aarch64.tar.gz > /artifacts/btest-linux-aarch64.tar.gz.sha256
 
@@ -87,20 +69,12 @@ jobs:
     container:
       image: rust:1.86-slim
     steps:
-      - name: Install dependencies
+      - name: Install cross toolchain
         run: |
-          apt-get update && apt-get install -y --no-install-recommends git gcc-arm-linux-gnueabihf
+          apt-get update && apt-get install -y --no-install-recommends gcc-arm-linux-gnueabihf
           rustup target add armv7-unknown-linux-musleabihf
-
-      - name: Checkout
-        run: |
-          git config --global --add safe.directory '*'
-          git clone --depth 1 --branch ${GITHUB_REF_NAME} ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git /build
-
-      - name: Configure cross-linker
-        run: |
-          mkdir -p /build/.cargo
-          cat > /build/.cargo/config.toml << 'TOML'
+          mkdir -p .cargo
+          cat > .cargo/config.toml << 'TOML'
           [target.armv7-unknown-linux-musleabihf]
           linker = "arm-linux-gnueabihf-gcc"
           rustflags = ["-C", "target-feature=+crt-static"]
@@ -108,12 +82,11 @@ jobs:
 
       - name: Build
         run: cargo build --release --target armv7-unknown-linux-musleabihf
-        working_directory: /build
 
       - name: Package
         run: |
           mkdir -p /artifacts
-          cd /build/target/armv7-unknown-linux-musleabihf/release
+          cd target/armv7-unknown-linux-musleabihf/release
           tar czf /artifacts/btest-linux-armv7.tar.gz btest
           sha256sum /artifacts/btest-linux-armv7.tar.gz > /artifacts/btest-linux-armv7.tar.gz.sha256
 
@@ -150,28 +123,25 @@ jobs:
 
           echo "Creating release ${TAG} for ${REPO}..."
 
-          # Create release
-          RELEASE_BODY="## btest-rs ${TAG}
-
-          ### Downloads
+          RELEASE_BODY=$(cat << 'BODY'
+          ## Downloads
 
           | Platform | Architecture | File |
           |----------|-------------|------|
           | Linux | x86_64 | btest-linux-x86_64.tar.gz |
           | Linux | aarch64 (RPi 64-bit) | btest-linux-aarch64.tar.gz |
           | Linux | armv7 (RPi 32-bit) | btest-linux-armv7.tar.gz |
-          | macOS | Build locally | \`cargo build --release\` |
+          | macOS | Build locally | `cargo build --release` |
 
           ### Quick Install
 
-          \`\`\`bash
-          # Download and extract
+          ```bash
           tar xzf btest-linux-x86_64.tar.gz
           sudo mv btest /usr/local/bin/
-
-          # Or use the systemd installer
-          sudo ./install-service.sh --auth-user admin --auth-pass password
-          \`\`\`"
+          sudo btest -s -a admin -p password
+          ```
+          BODY
+          )
 
           RELEASE_ID=$(curl -sf -X POST \
             -H "Authorization: token ${TOKEN}" \
@@ -182,7 +152,6 @@ jobs:
 
           echo "Created release ID: ${RELEASE_ID}"
 
-          # Upload each artifact file
           for file in /artifacts/btest-linux-*/*.tar.gz /artifacts/btest-linux-*/*.sha256; do
             if [ -f "$file" ]; then
               FILENAME=$(basename "$file")
