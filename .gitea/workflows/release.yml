@@ -11,10 +11,18 @@ jobs:
     container:
       image: rust:1.86-slim
     steps:
-      - name: Install musl toolchain
+      - name: Install dependencies
         run: |
-          apt-get update && apt-get install -y --no-install-recommends musl-tools
+          apt-get update && apt-get install -y --no-install-recommends git musl-tools
           rustup target add x86_64-unknown-linux-musl
+
+      - name: Ensure code is present
+        run: |
+          git config --global --add safe.directory '*'
+          if [ ! -f "Cargo.toml" ]; then
+            git clone --depth 1 --branch ${GITHUB_REF_NAME} ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git /tmp/src
+            cp -a /tmp/src/. .
+          fi
 
       - name: Build
         run: cargo build --release --target x86_64-unknown-linux-musl
@@ -37,10 +45,21 @@ jobs:
     container:
       image: rust:1.86-slim
     steps:
-      - name: Install cross toolchain
+      - name: Install dependencies
         run: |
-          apt-get update && apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu
+          apt-get update && apt-get install -y --no-install-recommends git gcc-aarch64-linux-gnu
           rustup target add aarch64-unknown-linux-musl
+
+      - name: Ensure code is present
+        run: |
+          git config --global --add safe.directory '*'
+          if [ ! -f "Cargo.toml" ]; then
+            git clone --depth 1 --branch ${GITHUB_REF_NAME} ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git /tmp/src
+            cp -a /tmp/src/. .
+          fi
+
+      - name: Configure cross-linker
+        run: |
           mkdir -p .cargo
           cat > .cargo/config.toml << 'TOML'
           [target.aarch64-unknown-linux-musl]
@@ -69,10 +88,21 @@ jobs:
     container:
       image: rust:1.86-slim
     steps:
-      - name: Install cross toolchain
+      - name: Install dependencies
         run: |
-          apt-get update && apt-get install -y --no-install-recommends gcc-arm-linux-gnueabihf
+          apt-get update && apt-get install -y --no-install-recommends git gcc-arm-linux-gnueabihf
           rustup target add armv7-unknown-linux-musleabihf
+
+      - name: Ensure code is present
+        run: |
+          git config --global --add safe.directory '*'
+          if [ ! -f "Cargo.toml" ]; then
+            git clone --depth 1 --branch ${GITHUB_REF_NAME} ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git /tmp/src
+            cp -a /tmp/src/. .
+          fi
+
+      - name: Configure cross-linker
+        run: |
           mkdir -p .cargo
           cat > .cargo/config.toml << 'TOML'
           [target.armv7-unknown-linux-musleabihf]
