@@ -24,11 +24,7 @@ REGISTRY_HOST="${REGISTRY_HOST#https://}"
 REGISTRY_HOST="${REGISTRY_HOST#http://}"
 IMAGE="${REGISTRY_HOST}/manawenuz/btest-rs"
 
-# Login
-if [[ -n "${GITEA_TOKEN:-}" ]]; then
-    DOCKER_USER="${GITEA_USER:?Set GITEA_USER in .env}"
-    echo "${GITEA_TOKEN}" | docker login "${REGISTRY_HOST}" -u "${DOCKER_USER}" --password-stdin
-fi
+# NOTE: Run 'docker login git.manko.yoga' manually first if not authenticated
 
 mkdir -p dist/docker-amd64 dist/docker-arm64
 
