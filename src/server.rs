@@ -949,9 +949,17 @@ async fn udp_status_loop(
         let tx_bytes = state.tx_bytes.swap(0, Ordering::Relaxed);
         let lost = state.rx_lost_packets.swap(0, Ordering::Relaxed);
 
+        // Report bytes relevant to the active direction.
+        // When TX-only: report tx_bytes so client knows data is flowing.
+        // When RX or BOTH: report rx_bytes (how much we received from client).
+        let report_bytes = if cmd.server_tx() && !cmd.server_rx() {
+            tx_bytes
+        } else {
+            rx_bytes
+        };
         let status = StatusMessage {
             seq,
-            bytes_received: rx_bytes as u32,
+            bytes_received: report_bytes as u32,
         };
         let serialized = status.serialize();
         tracing::debug!(
