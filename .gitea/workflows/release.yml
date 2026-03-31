@@ -25,13 +25,6 @@ jobs:
             armv7-unknown-linux-musleabihf \
             x86_64-pc-windows-gnu
 
-      - name: Install crane (OCI image tool)
-        run: |
-          CRANE_VERSION="0.20.3"
-          curl -sL "https://github.com/google/go-containerregistry/releases/download/v${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" \
-            | tar xz -C /usr/local/bin crane
-          crane version
-
       - name: Ensure code is present
         run: |
           git config --global --add safe.directory '*'
@@ -93,44 +86,6 @@ jobs:
           cat checksums-sha256.txt
           ls -lh
 
-      - name: Build and push Docker image
-        env:
-          TOKEN: ${{ secrets.RELEASE_TOKEN }}
-        run: |
-          TAG="${GITHUB_REF_NAME}"
-          REGISTRY="git.manko.yoga"
-          IMAGE="${REGISTRY}/manawenuz/btest-rs"
-
-          # Authenticate crane with Gitea registry
-          echo "${TOKEN}" | crane auth login "${REGISTRY}" -u token --password-stdin
-
-          # Build OCI image from the static x86_64 binary
-          mkdir -p /tmp/docker-root/usr/local/bin
-          cp target/x86_64-unknown-linux-musl/release/btest /tmp/docker-root/usr/local/bin/btest
-          chmod +x /tmp/docker-root/usr/local/bin/btest
-
-          # Create tarball layer
-          tar -cf /tmp/layer.tar -C /tmp/docker-root .
-
-          # Build image: append layer to scratch, then mutate config
-          crane append \
-            --base=scratch \
-            --new_layer=/tmp/layer.tar \
-            --new_tag="${IMAGE}:${TAG}"
-
-          # Set entrypoint and default cmd
-          crane mutate "${IMAGE}:${TAG}" \
-            --entrypoint="/usr/local/bin/btest" \
-            --cmd="-s" \
-            --tag="${IMAGE}:${TAG}"
-
-          # Also tag as latest
-          crane tag "${IMAGE}:${TAG}" latest
-
-          echo "Docker image pushed:"
-          echo "  ${IMAGE}:${TAG}"
-          echo "  ${IMAGE}:latest"
-
       - name: Create release and upload
         env:
           TOKEN: ${{ secrets.RELEASE_TOKEN }}
@@ -148,7 +103,7 @@ jobs:
           | Linux | aarch64 (RPi 64-bit) | btest-linux-aarch64.tar.gz |
           | Linux | armv7 (RPi 32-bit) | btest-linux-armv7.tar.gz |
           | Windows | x86_64 | btest-windows-x86_64.zip |
-          | macOS | aarch64 / x86_64 | Build locally or download after manual upload |
+          | macOS | aarch64 / x86_64 | Run \`scripts/build-macos-release.sh --upload ${TAG}\` |
           | Docker | x86_64 | \`docker pull ${REGISTRY}/manawenuz/btest-rs:${TAG}\` |
 
           ### Quick Install (Linux)
