@@ -1,12 +1,15 @@
 [package]
-name = "mikrotik-btest"
+name = "btest-rs"
 version = "0.1.0"
 edition = "2021"
-description = "MikroTik Bandwidth Test (btest) server and client implementation in Rust"
+description = "MikroTik Bandwidth Test (btest) server and client — a Rust reimplementation"
 license = "MIT"
+repository = "https://github.com/samm-git/btest-opensource"
+keywords = ["mikrotik", "bandwidth", "btest", "network", "benchmarking"]
+categories = ["command-line-utilities", "network-programming"]
 
 [lib]
-name = "mikrotik_btest"
+name = "btest_rs"
 path = "src/lib.rs"
 
 [[bin]]

@@ -12,10 +12,12 @@ use crate::protocol::*;
 #[derive(Parser, Debug)]
 #[command(
     name = "btest",
-    about = "MikroTik Bandwidth Test (btest) - server and client",
+    about = "btest-rs: MikroTik Bandwidth Test server & client in Rust",
     version,
-    long_about = "Compatible bandwidth testing tool for MikroTik RouterOS devices.\n\
-                  Supports TCP and UDP modes with optional authentication."
+    long_about = "btest-rs — A Rust reimplementation of the MikroTik Bandwidth Test protocol.\n\
+                  Compatible with MikroTik RouterOS devices. Supports TCP/UDP, bidirectional\n\
+                  testing, and MD5 authentication.\n\n\
+                  Based on btest-opensource by Alex Samorukov (https://github.com/samm-git/btest-opensource)"
 )]
 struct Cli {
     /// Run in server mode
