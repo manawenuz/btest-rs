@@ -26,34 +26,33 @@ pub fn compute_auth_hash(password: &str, challenge: &[u8; 16]) -> [u8; 16] {
 }
 
 /// Server-side: send auth challenge and verify response.
+/// `ok_response` is the 4-byte reply on success (normally AUTH_OK = [01,00,00,00]).
+/// For TCP multi-connection, pass [01,HI,LO,00] with a session token.
 /// Returns Ok(()) if auth succeeds or no auth is configured.
 pub async fn server_authenticate<S: AsyncReadExt + AsyncWriteExt + Unpin>(
     stream: &mut S,
     username: Option<&str>,
     password: Option<&str>,
+    ok_response: &[u8; 4],
 ) -> Result<()> {
     match (username, password) {
         (None, None) => {
-            // No auth required
-            stream.write_all(&AUTH_OK).await?;
+            stream.write_all(ok_response).await?;
             stream.flush().await?;
             Ok(())
         }
         (_, Some(pass)) => {
-            // Send auth challenge
             stream.write_all(&AUTH_REQUIRED).await?;
             let challenge = generate_challenge();
             stream.write_all(&challenge).await?;
             stream.flush().await?;
 
-            // Receive response: 16 bytes hash + 32 bytes username
             let mut response = [0u8; 48];
             stream.read_exact(&mut response).await?;
 
             let received_hash = &response[0..16];
             let received_user = &response[16..48];
 
-            // Extract username (null-terminated)
             let user_end = received_user
                 .iter()
                 .position(|&b| b == 0)
@@ -61,7 +60,6 @@ pub async fn server_authenticate<S: AsyncReadExt + AsyncWriteExt + Unpin>(
             let received_username = std::str::from_utf8(&received_user[..user_end])
                 .unwrap_or("");
 
-            // Verify username if configured
             if let Some(expected_user) = username {
                 if received_username != expected_user {
                     tracing::warn!("Auth failed: username mismatch (got '{}')", received_username);
@@ -71,7 +69,6 @@ pub async fn server_authenticate<S: AsyncReadExt + AsyncWriteExt + Unpin>(
                 }
             }
 
-            // Verify hash
             let expected_hash = compute_auth_hash(pass, &challenge);
             if received_hash != expected_hash {
                 tracing::warn!("Auth failed: hash mismatch for user '{}'", received_username);
@@ -81,13 +78,12 @@ pub async fn server_authenticate<S: AsyncReadExt + AsyncWriteExt + Unpin>(
             }
 
             tracing::info!("Auth successful for user '{}'", received_username);
-            stream.write_all(&AUTH_OK).await?;
+            stream.write_all(ok_response).await?;
             stream.flush().await?;
             Ok(())
         }
         (Some(_), None) => {
-            // Username but no password - treat as no auth
-            stream.write_all(&AUTH_OK).await?;
+            stream.write_all(ok_response).await?;
             stream.flush().await?;
             Ok(())
         }

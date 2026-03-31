@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -5,10 +6,21 @@ use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
+use tokio::sync::Mutex;
 
 use crate::auth;
 use crate::bandwidth::{self, BandwidthState};
 use crate::protocol::*;
+
+/// Pending TCP multi-connection session: first connection creates this,
+/// subsequent connections join via the session token.
+struct TcpSession {
+    peer_ip: std::net::IpAddr,
+    streams: Vec<TcpStream>,
+    expected: u8,
+}
+
+type SessionMap = Arc<Mutex<HashMap<u16, TcpSession>>>;
 
 pub async fn run_server(
     port: u16,
@@ -20,6 +32,7 @@ pub async fn run_server(
     tracing::info!("btest server listening on {}", addr);
 
     let udp_port_offset = Arc::new(std::sync::atomic::AtomicU16::new(0));
+    let sessions: SessionMap = Arc::new(Mutex::new(HashMap::new()));
 
     loop {
         let (stream, peer) = listener.accept().await?;
@@ -28,9 +41,12 @@ pub async fn run_server(
         let auth_user = auth_user.clone();
         let auth_pass = auth_pass.clone();
         let udp_offset = udp_port_offset.clone();
+        let sessions = sessions.clone();
 
         tokio::spawn(async move {
-            if let Err(e) = handle_client(stream, peer, auth_user, auth_pass, udp_offset).await {
+            if let Err(e) =
+                handle_client(stream, peer, auth_user, auth_pass, udp_offset, sessions).await
+            {
                 tracing::error!("Client {} error: {}", peer, e);
             }
         });
@@ -43,6 +59,7 @@ async fn handle_client(
     auth_user: Option<String>,
     auth_pass: Option<String>,
     udp_port_offset: Arc<std::sync::atomic::AtomicU16>,
+    sessions: SessionMap,
 ) -> Result<()> {
     stream.set_nodelay(true)?;
 
@@ -65,15 +82,125 @@ async fn handle_client(
         cmd.local_tx_speed,
     );
 
+    // Build auth OK response - include session token for TCP multi-connection
+    let is_tcp_multi = !cmd.is_udp() && cmd.tcp_conn_count > 0;
+    let session_token: u16 = if is_tcp_multi {
+        rand::random::<u16>() | 0x0101 // ensure both bytes non-zero
+    } else {
+        0
+    };
+    let ok_response: [u8; 4] = if is_tcp_multi {
+        // MikroTik expects 01:HI:LO:00 for multi-connection support
+        [0x01, (session_token >> 8) as u8, (session_token & 0xFF) as u8, 0x00]
+    } else {
+        AUTH_OK
+    };
+
+    if is_tcp_multi {
+        tracing::info!(
+            "TCP multi-connection: conn_count={}, session_token={:04x}, ok_response={:02x?}",
+            cmd.tcp_conn_count, session_token, ok_response,
+        );
+    }
+
+    // Check if this is a secondary connection joining an existing TCP session
+    if is_tcp_multi {
+        let mut map = sessions.lock().await;
+        for (_token, session) in map.iter_mut() {
+            if session.peer_ip == peer.ip()
+                && session.streams.len() < session.expected as usize
+            {
+                tracing::info!(
+                    "Client {} joining TCP session ({}/{})",
+                    peer,
+                    session.streams.len() + 1,
+                    session.expected,
+                );
+                drop(map);
+                // Secondary connections also do auth with the same session token response
+                auth::server_authenticate(
+                    &mut stream,
+                    auth_user.as_deref(),
+                    auth_pass.as_deref(),
+                    &ok_response,
+                )
+                .await?;
+                let mut map = sessions.lock().await;
+                for (_t, s) in map.iter_mut() {
+                    if s.peer_ip == peer.ip() && s.streams.len() < s.expected as usize {
+                        s.streams.push(stream);
+                        return Ok(());
+                    }
+                }
+                return Ok(());
+            }
+        }
+        drop(map);
+    }
+
+    // Primary connection auth
     auth::server_authenticate(
         &mut stream,
         auth_user.as_deref(),
         auth_pass.as_deref(),
+        &ok_response,
     )
     .await?;
 
     if cmd.is_udp() {
         run_udp_test_server(&mut stream, peer, &cmd, udp_port_offset).await
+    } else if is_tcp_multi {
+        let conn_count = cmd.tcp_conn_count;
+
+        // Register session for secondary connections to find
+        {
+            let mut map = sessions.lock().await;
+            map.insert(session_token, TcpSession {
+                peer_ip: peer.ip(),
+                streams: Vec::new(),
+                expected: conn_count,
+            });
+        }
+
+        // Wait for secondary connections
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let count = {
+                let map = sessions.lock().await;
+                map.get(&session_token)
+                    .map(|s| s.streams.len())
+                    .unwrap_or(0)
+            };
+            if count + 1 >= conn_count as usize {
+                break;
+            }
+            if Instant::now() > deadline {
+                tracing::warn!(
+                    "Timeout waiting for TCP connections ({}/{}), proceeding",
+                    count + 1,
+                    conn_count,
+                );
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        let extra_streams = {
+            let mut map = sessions.lock().await;
+            map.remove(&session_token)
+                .map(|s| s.streams)
+                .unwrap_or_default()
+        };
+
+        tracing::info!(
+            "TCP multi-connection: starting with {} total streams",
+            1 + extra_streams.len(),
+        );
+
+        // Run test - primary stream handles data, extras provide parallel TCP bandwidth
+        // For now just use the primary; extras keep the connection alive
+        let _extra_keepalive = extra_streams;
+        run_tcp_test_server(stream, cmd).await
     } else {
         run_tcp_test_server(stream, cmd).await
     }
