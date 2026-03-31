@@ -105,7 +105,6 @@ jobs:
           echo "${TOKEN}" | crane auth login "${REGISTRY}" -u token --password-stdin
 
           # Build OCI image from the static x86_64 binary
-          # Create a minimal layer with just the binary
           mkdir -p /tmp/docker-root/usr/local/bin
           cp target/x86_64-unknown-linux-musl/release/btest /tmp/docker-root/usr/local/bin/btest
           chmod +x /tmp/docker-root/usr/local/bin/btest
@@ -113,13 +112,17 @@ jobs:
           # Create tarball layer
           tar -cf /tmp/layer.tar -C /tmp/docker-root .
 
-          # Push as scratch-based image
+          # Build image: append layer to scratch, then mutate config
           crane append \
             --base=scratch \
             --new_layer=/tmp/layer.tar \
-            --new_tag="${IMAGE}:${TAG}" \
-            --set-entrypoint="/usr/local/bin/btest" \
-            --set-cmd="-s"
+            --new_tag="${IMAGE}:${TAG}"
+
+          # Set entrypoint and default cmd
+          crane mutate "${IMAGE}:${TAG}" \
+            --entrypoint="/usr/local/bin/btest" \
+            --cmd="-s" \
+            --tag="${IMAGE}:${TAG}"
 
           # Also tag as latest
           crane tag "${IMAGE}:${TAG}" latest
