@@ -445,13 +445,17 @@ async fn tcp_rx_loop(mut reader: tokio::net::tcp::OwnedReadHalf, state: Arc<Band
 
 /// Send periodic 12-byte status messages on the TCP connection.
 /// Used when server is in RX mode — tells the client how many bytes we received.
+/// Send periodic 12-byte status messages on the TCP connection.
+/// Reports bytes received since last status (delta, not cumulative).
+/// MikroTik server sends these ~every 500ms-1s.
 async fn tcp_status_sender(
     mut writer: tokio::net::tcp::OwnedWriteHalf,
     state: Arc<BandwidthState>,
 ) {
     let mut seq: u32 = 0;
+    let mut last_rx: u64 = 0;
     let mut interval = tokio::time::interval(Duration::from_secs(1));
-    interval.tick().await; // consume first immediate tick
+    interval.tick().await;
 
     while state.running.load(Ordering::Relaxed) {
         interval.tick().await;
@@ -460,11 +464,13 @@ async fn tcp_status_sender(
         }
 
         seq += 1;
-        let rx_bytes = state.rx_bytes.load(Ordering::Relaxed);
+        let current_rx = state.rx_bytes.load(Ordering::Relaxed);
+        let delta = current_rx - last_rx;
+        last_rx = current_rx;
 
         let status = StatusMessage {
             seq,
-            bytes_received: rx_bytes as u32,
+            bytes_received: delta as u32,
         };
 
         if writer.write_all(&status.serialize()).await.is_err() {
