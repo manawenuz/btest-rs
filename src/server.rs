@@ -652,15 +652,18 @@ async fn run_udp_test_server(
     // silently dropping packets from the other ports.
     // So: only connect() for single-connection mode (enables send() without addr).
     // For multi-connection, we leave the socket unconnected and use send_to()/recv_from().
-    let multi_conn = cmd.tcp_conn_count > 0;
-    if !multi_conn {
+    // Don't connect() UDP socket when:
+    // - Multi-connection mode (MikroTik sends from multiple source ports)
+    // - IPv6 (macOS connected IPv6 UDP sockets have receive issues)
+    let use_unconnected = cmd.tcp_conn_count > 0 || peer.is_ipv6();
+    if !use_unconnected {
         udp.connect(client_udp_addr).await?;
     }
 
     tracing::info!(
         "UDP mode: conn_count={}, socket={}",
         cmd.tcp_conn_count.max(1),
-        if multi_conn { "unconnected (multi-port RX)" } else { "connected" },
+        if use_unconnected { "unconnected" } else { "connected" },
     );
 
     let state = BandwidthState::new();
@@ -674,7 +677,7 @@ async fn run_udp_test_server(
     let state_tx = state.clone();
     let udp_tx = udp.clone();
     let tx_target = client_udp_addr;
-    let is_multi = multi_conn;
+    let is_multi = use_unconnected;
     let tx_handle = if server_should_tx {
         Some(tokio::spawn(async move {
             udp_tx_loop(&udp_tx, tx_size, tx_speed, state_tx, is_multi, tx_target).await
