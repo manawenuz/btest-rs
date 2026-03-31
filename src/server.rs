@@ -736,13 +736,17 @@ async fn udp_tx_loop(
             Err(e) => {
                 consecutive_errors += 1;
                 if consecutive_errors == 1 {
-                    tracing::warn!("UDP TX send error: {} (target={})", e, target);
+                    tracing::debug!("UDP TX send error: {} (target={})", e, target);
                 }
-                if consecutive_errors > 1000 {
+                if consecutive_errors > 50000 {
                     tracing::warn!("UDP TX: too many consecutive send errors, stopping");
                     break;
                 }
-                tokio::time::sleep(Duration::from_micros(200)).await;
+                // Adaptive backoff: sleep longer as errors accumulate
+                let backoff = Duration::from_micros(
+                    (200 + consecutive_errors.min(5000) as u64 * 10).min(10000)
+                );
+                tokio::time::sleep(backoff).await;
                 continue;
             }
         }
@@ -766,9 +770,14 @@ async fn udp_tx_loop(
                 }
             }
             None => {
-                // Unlimited: yield every 64 packets to keep system responsive
+                // Unlimited: yield every 64 packets. On ENOBUFS-prone systems
+                // (IPv6, macOS), sleep briefly to let the kernel drain buffers.
                 if seq % 64 == 0 {
-                    tokio::task::yield_now().await;
+                    if consecutive_errors > 0 {
+                        tokio::time::sleep(Duration::from_micros(500)).await;
+                    } else {
+                        tokio::task::yield_now().await;
+                    }
                 }
             }
         }
