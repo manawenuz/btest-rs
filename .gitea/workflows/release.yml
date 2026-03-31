@@ -166,7 +166,7 @@ jobs:
       - name: Create release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+          GITEA_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
           TAG="${GITHUB_REF##*/}"
           GITEA_URL="https://git.manko.yoga"
