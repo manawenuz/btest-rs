@@ -70,43 +70,37 @@ async fn handle_client(
     stream.read_exact(&mut cmd_buf).await?;
     tracing::debug!("Raw command from {}: {:02x?}", peer, cmd_buf);
 
-    // Check if this looks like a secondary TCP connection joining a session.
-    // Secondary connections send the session token in bytes 1-2 of what looks
-    // like a command, but with different/invalid proto+direction values.
+    // Check if this is a secondary TCP connection joining a session.
+    // Secondary connections send the session token in bytes 0-1 of their "command":
+    //   [TOKEN_HI, TOKEN_LO, 0x02, 0x00, ...]
+    // They do NOT do auth — just send them AUTH_OK with the token and they join.
     {
-        let map = sessions.lock().await;
-        // Try to match session token from bytes - secondary connections may
-        // send the token we gave them in the auth OK response
-        for (&token, session) in map.iter() {
+        let mut map = sessions.lock().await;
+        let received_token = ((cmd_buf[0] as u16) << 8) | (cmd_buf[1] as u16);
+        if let Some(session) = map.get_mut(&received_token) {
             if session.peer_ip == peer.ip()
                 && session.streams.len() < session.expected as usize
             {
                 tracing::info!(
-                    "Client {} is secondary TCP connection, raw={:02x?}",
-                    peer, cmd_buf,
+                    "Client {} is secondary TCP connection (token={:04x})",
+                    peer, received_token,
                 );
-                drop(map);
 
-                // Secondary connection: authenticate and join session
-                auth::server_authenticate(
-                    &mut stream,
-                    auth_user.as_deref(),
-                    auth_pass.as_deref(),
-                    &[0x01, (token >> 8) as u8, (token & 0xFF) as u8, 0x00],
-                )
-                .await?;
+                // No auth for secondary connections — just send OK with token
+                let ok = [0x01, cmd_buf[0], cmd_buf[1], 0x00];
+                stream.write_all(&ok).await?;
+                stream.flush().await?;
 
-                let mut map = sessions.lock().await;
-                for (_t, s) in map.iter_mut() {
-                    if s.peer_ip == peer.ip() && s.streams.len() < s.expected as usize {
-                        s.streams.push(stream);
-                        tracing::info!("Secondary connection joined ({}/{})", s.streams.len() + 1, s.expected);
-                        return Ok(());
-                    }
-                }
+                session.streams.push(stream);
+                tracing::info!(
+                    "Secondary connection joined ({}/{})",
+                    session.streams.len() + 1,
+                    session.expected,
+                );
                 return Ok(());
             }
         }
+        drop(map);
     }
 
     // Primary connection: parse the command normally
