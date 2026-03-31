@@ -1,6 +1,7 @@
 services:
   btest-server:
     build: .
+    image: git.manko.yoga/manawenuz/btest-rs:latest
     container_name: btest-server
     ports:
       - "2000:2000/tcp"
@@ -12,6 +13,7 @@ services:
   # Server with authentication enabled
   btest-server-auth:
     build: .
+    image: git.manko.yoga/manawenuz/btest-rs:latest
     container_name: btest-server-auth
     ports:
       - "2010:2000/tcp"
