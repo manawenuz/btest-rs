@@ -71,16 +71,40 @@ fn prime_mod_sqrt(a: &BigUint, p_val: &BigUint) -> Option<(BigUint, BigUint)> {
         return None;
     }
 
-    // p ≡ 3 (mod 4) for Curve25519's p, so we can use the simple formula
-    // But let's use Tonelli-Shanks for generality
-    if p_val % BigUint::from(4u32) == BigUint::from(3u32) {
+    // For p ≡ 5 (mod 8) — which is Curve25519's case — use Atkin's algorithm
+    // This is more reliable than Tonelli-Shanks for this specific case
+    let p_mod_8 = p_val % BigUint::from(8u32);
+    if p_mod_8 == BigUint::from(5u32) {
+        // v = (2a)^((p-5)/8) mod p
+        let exp = (p_val - BigUint::from(5u32)) / BigUint::from(8u32);
+        let two_a = (BigUint::from(2u32) * &a) % p_val;
+        let v = two_a.modpow(&exp, p_val);
+        // i = 2 * a * v^2 mod p
+        let i_val = (BigUint::from(2u32) * &a % p_val * &v % p_val * &v) % p_val;
+        // x = a * v * (i - 1) mod p
+        let i_minus_1 = if i_val >= BigUint::one() {
+            (&i_val - BigUint::one()) % p_val
+        } else {
+            (p_val - BigUint::one() + &i_val) % p_val
+        };
+        let x = (&a * &v % p_val * &i_minus_1) % p_val;
+        // Verify: x^2 ≡ a (mod p)
+        let check = (&x * &x) % p_val;
+        if check == a {
+            let other = p_val - &x;
+            return Some((x, other));
+        }
+        return None;
+    }
+
+    if p_mod_8 == BigUint::from(3u32) || p_mod_8 == BigUint::from(7u32) {
         let exp = (p_val + BigUint::one()) / BigUint::from(4u32);
         let x = a.modpow(&exp, p_val);
         let other = p_val - &x;
         return Some((x, other));
     }
 
-    // Tonelli-Shanks
+    // General Tonelli-Shanks for other primes
     let mut q = p_val - BigUint::one();
     let mut s = 0u32;
     while q.is_even() {
@@ -106,7 +130,7 @@ fn prime_mod_sqrt(a: &BigUint, p_val: &BigUint) -> Option<(BigUint, BigUint)> {
         }
         let b = c.modpow(&BigUint::from(1u32 << (m - i - 1)), p_val);
         x = (&x * &b) % p_val;
-        t = (&t * &b % p_val * &b) % p_val;
+        t = ((&t * &b % p_val) * &b) % p_val;
         c = (&b * &b) % p_val;
         m = i;
     }
@@ -466,7 +490,6 @@ impl EcSrp5Credentials {
 pub async fn server_authenticate<S: AsyncReadExt + AsyncWriteExt + Unpin>(
     stream: &mut S,
     username: &str,
-    password: &str,
     creds: &EcSrp5Credentials,
 ) -> Result<()> {
     tracing::info!("Starting EC-SRP5 server authentication");
@@ -528,15 +551,12 @@ pub async fn server_authenticate<S: AsyncReadExt + AsyncWriteExt + Unpin>(
     let j = sha256_bytes(&j_input);
     let j_int = BigUint::from_bytes_be(&j);
 
-    // Z = s_b * (W_a + j * gamma_verify)
+    // Server ECPESVDP-SRP-B: Z = s_b * (W_a + j * gamma)
+    // gamma = lift_x(x_gamma, parity=1) — the raw validator public key point
+    // (NOT redp1 — that's used for blinding W_b, not for verification)
     let w_a = w.lift_x(&BigUint::from_bytes_be(&x_w_a), x_w_a_parity);
-    let i = w.gen_password_validator_priv(username, password, &creds.salt);
-    let (x_gamma_check, _) = w.gen_public_key(&i);
-    let gamma_verify = w.lift_x(
-        &BigUint::from_bytes_be(&x_gamma_check),
-        true, // parity=1 for verification
-    );
-    let j_gamma = gamma_verify.scalar_mul(&j_int);
+    let gamma = w.lift_x(&BigUint::from_bytes_be(&creds.x_gamma), true);
+    let j_gamma = gamma.scalar_mul(&j_int);
     let sum = w_a.add(&j_gamma);
     let z_point = sum.scalar_mul(&s_b_int);
     let (z, _) = w.to_montgomery(&z_point);

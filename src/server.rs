@@ -211,7 +211,6 @@ async fn handle_client(
         crate::ecsrp5::server_authenticate(
             &mut stream,
             auth_user.as_deref().unwrap_or("admin"),
-            auth_pass.as_deref().unwrap_or(""),
             creds,
         )
         .await?;
