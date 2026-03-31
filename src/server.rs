@@ -643,13 +643,25 @@ async fn run_udp_test_server(
     } else {
         format!("0.0.0.0:{}", server_udp_port).parse().unwrap()
     };
-    let udp = UdpSocket::bind(bind_addr).await?;
-
-    // Enlarge send/receive buffers — IPv6 on macOS has small defaults
-    let std_sock = udp.into_std()?;
-    let sock2 = socket2::Socket::from(std_sock);
-    let _ = sock2.set_send_buffer_size(4 * 1024 * 1024); // 4MB
+    // Create socket with socket2 FIRST to set buffer sizes before tokio wraps it
+    let domain = if peer.is_ipv6() {
+        socket2::Domain::IPV6
+    } else {
+        socket2::Domain::IPV4
+    };
+    let sock2 = socket2::Socket::new(domain, socket2::Type::DGRAM, Some(socket2::Protocol::UDP))?;
+    sock2.set_nonblocking(true)?;
+    let _ = sock2.set_send_buffer_size(4 * 1024 * 1024);
     let _ = sock2.set_recv_buffer_size(4 * 1024 * 1024);
+    if peer.is_ipv6() {
+        let _ = sock2.set_only_v6(true);
+    }
+    sock2.bind(&bind_addr.into())?;
+    tracing::debug!(
+        "UDP socket: sndbuf={}, rcvbuf={}",
+        sock2.send_buffer_size().unwrap_or(0),
+        sock2.recv_buffer_size().unwrap_or(0),
+    );
     let udp = UdpSocket::from_std(sock2.into())?;
 
     let client_udp_addr = SocketAddr::new(peer.ip(), client_udp_port);
