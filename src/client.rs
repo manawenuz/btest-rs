@@ -213,9 +213,19 @@ async fn run_udp_test_client(
         server_udp_port, client_udp_port,
     );
 
-    let udp = UdpSocket::bind(format!("0.0.0.0:{}", client_udp_port)).await?;
-    let server_udp_addr: SocketAddr =
-        format!("{}:{}", host, server_udp_port).parse().unwrap();
+    // Detect IPv6 from the host address
+    let is_ipv6 = host.contains(':');
+    let bind_addr: SocketAddr = if is_ipv6 {
+        format!("[::]:{}",  client_udp_port).parse().unwrap()
+    } else {
+        format!("0.0.0.0:{}", client_udp_port).parse().unwrap()
+    };
+    let udp = UdpSocket::bind(bind_addr).await?;
+    let server_udp_addr = if is_ipv6 {
+        SocketAddr::new(host.parse().unwrap(), server_udp_port)
+    } else {
+        format!("{}:{}", host, server_udp_port).parse().unwrap()
+    };
     udp.connect(server_udp_addr).await?;
 
     if nat_mode {
