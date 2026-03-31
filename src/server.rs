@@ -65,7 +65,56 @@ async fn handle_client(
 
     send_hello(&mut stream).await?;
 
-    let cmd = recv_command(&mut stream).await?;
+    // Read 16-byte command (or whatever the client sends)
+    let mut cmd_buf = [0u8; 16];
+    stream.read_exact(&mut cmd_buf).await?;
+    tracing::debug!("Raw command from {}: {:02x?}", peer, cmd_buf);
+
+    // Check if this looks like a secondary TCP connection joining a session.
+    // Secondary connections send the session token in bytes 1-2 of what looks
+    // like a command, but with different/invalid proto+direction values.
+    {
+        let map = sessions.lock().await;
+        // Try to match session token from bytes - secondary connections may
+        // send the token we gave them in the auth OK response
+        for (&token, session) in map.iter() {
+            if session.peer_ip == peer.ip()
+                && session.streams.len() < session.expected as usize
+            {
+                tracing::info!(
+                    "Client {} is secondary TCP connection, raw={:02x?}",
+                    peer, cmd_buf,
+                );
+                drop(map);
+
+                // Secondary connection: authenticate and join session
+                auth::server_authenticate(
+                    &mut stream,
+                    auth_user.as_deref(),
+                    auth_pass.as_deref(),
+                    &[0x01, (token >> 8) as u8, (token & 0xFF) as u8, 0x00],
+                )
+                .await?;
+
+                let mut map = sessions.lock().await;
+                for (_t, s) in map.iter_mut() {
+                    if s.peer_ip == peer.ip() && s.streams.len() < s.expected as usize {
+                        s.streams.push(stream);
+                        tracing::info!("Secondary connection joined ({}/{})", s.streams.len() + 1, s.expected);
+                        return Ok(());
+                    }
+                }
+                return Ok(());
+            }
+        }
+    }
+
+    // Primary connection: parse the command normally
+    let cmd = Command::deserialize(&cmd_buf);
+    if cmd.proto > 1 || cmd.direction == 0 || cmd.direction > 3 {
+        return Err(BtestError::InvalidCommand);
+    }
+
     tracing::info!(
         "Client {} command: proto={} dir={} conn_count={} tx_size={} remote_speed={} local_speed={}",
         peer,
