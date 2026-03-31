@@ -2,3 +2,4 @@
 /dist
 btest_original
 .claude/
+.env

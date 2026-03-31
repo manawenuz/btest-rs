@@ -9,8 +9,15 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-GITEA_URL="https://git.manko.yoga"
-REPO="manawenuz/btest-rs"
+# Load .env if present
+if [[ -f .env ]]; then
+    set -a
+    source .env
+    set +a
+fi
+
+GITEA_URL="${GITEA_URL:-https://git.manko.yoga}"
+REPO="${REPO:-manawenuz/btest-rs}"
 UPLOAD=""
 TAG=""
 
