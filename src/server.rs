@@ -198,7 +198,7 @@ async fn handle_client(
     );
 
     // Build auth OK response - include session token for TCP multi-connection
-    let is_tcp_multi = !cmd.is_udp() && cmd.tcp_conn_count > 0;
+    let is_tcp_multi = !cmd.is_udp() && cmd.tcp_conn_count > 1;
     let session_token: u16 = if is_tcp_multi {
         rand::random::<u16>() | 0x0101 // ensure both bytes non-zero
     } else {
@@ -669,7 +669,7 @@ async fn run_udp_test_server(
     // On IPv6, send a probe packet to trigger NDP neighbor resolution before blasting.
     // macOS returns ENOBUFS on send_to() until the neighbor cache is populated.
     if peer.is_ipv6() {
-        let _ = udp.send_to(&[0u8; 1], client_udp_addr).await;
+        let _ = udp.send_to(&[], client_udp_addr).await;
         tokio::time::sleep(Duration::from_millis(200)).await;
         tracing::debug!("IPv6 NDP probe sent to {}", client_udp_addr);
     }
@@ -682,7 +682,7 @@ async fn run_udp_test_server(
     // from multiple source ports). For single-connection, always connect() —
     // this is critical for IPv6 where send_to() hits ENOBUFS but send() works.
     // recv_from() works fine on connected sockets for single source.
-    let use_unconnected = cmd.tcp_conn_count > 0;
+    let use_unconnected = cmd.tcp_conn_count > 1;
     if !use_unconnected {
         udp.connect(client_udp_addr).await?;
     }
@@ -949,17 +949,11 @@ async fn udp_status_loop(
         let tx_bytes = state.tx_bytes.swap(0, Ordering::Relaxed);
         let lost = state.rx_lost_packets.swap(0, Ordering::Relaxed);
 
-        // Report bytes relevant to the active direction.
-        // When TX-only: report tx_bytes so client knows data is flowing.
-        // When RX or BOTH: report rx_bytes (how much we received from client).
-        let report_bytes = if cmd.server_tx() && !cmd.server_rx() {
-            tx_bytes
-        } else {
-            rx_bytes
-        };
+        // Always report rx_bytes — how much we received from the client.
+        // MikroTik client tracks its own Rx independently by counting UDP arrivals.
         let status = StatusMessage {
             seq,
-            bytes_received: report_bytes as u32,
+            bytes_received: rx_bytes as u32,
         };
         let serialized = status.serialize();
         tracing::debug!(
