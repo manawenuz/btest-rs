@@ -666,6 +666,14 @@ async fn run_udp_test_server(
 
     let client_udp_addr = SocketAddr::new(peer.ip(), client_udp_port);
 
+    // On IPv6, send a probe packet to trigger NDP neighbor resolution before blasting.
+    // macOS returns ENOBUFS on send_to() until the neighbor cache is populated.
+    if peer.is_ipv6() {
+        let _ = udp.send_to(&[0u8; 1], client_udp_addr).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        tracing::debug!("IPv6 NDP probe sent to {}", client_udp_addr);
+    }
+
     // When connection_count > 1, MikroTik sends UDP from MULTIPLE source ports
     // (base_port, base_port+1, ..., base_port+N-1) all to our single server port.
     // A connect()'d UDP socket only accepts from the one connected address,
