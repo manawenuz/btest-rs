@@ -10,190 +10,189 @@ env:
 
 jobs:
   build-linux-x86_64:
-    runs-on: ubuntu-latest
+    runs_on: ubuntu-latest
     container:
       image: rust:1.86-slim
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install musl toolchain
+      - name: Install dependencies
         run: |
-          apt-get update && apt-get install -y --no-install-recommends musl-tools
+          apt-get update && apt-get install -y --no-install-recommends git musl-tools
           rustup target add x86_64-unknown-linux-musl
+
+      - name: Checkout
+        run: |
+          git config --global --add safe.directory '*'
+          git clone --depth 1 --branch ${GITHUB_REF_NAME} ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git /build
 
       - name: Build
         run: cargo build --release --target x86_64-unknown-linux-musl
+        working_directory: /build
 
       - name: Package
         run: |
-          cd target/x86_64-unknown-linux-musl/release
-          tar czf /tmp/btest-linux-x86_64.tar.gz btest
-          sha256sum /tmp/btest-linux-x86_64.tar.gz > /tmp/btest-linux-x86_64.tar.gz.sha256
+          mkdir -p /artifacts
+          cd /build/target/x86_64-unknown-linux-musl/release
+          tar czf /artifacts/btest-linux-x86_64.tar.gz btest
+          sha256sum /artifacts/btest-linux-x86_64.tar.gz > /artifacts/btest-linux-x86_64.tar.gz.sha256
 
       - name: Upload artifact
         uses: actions/upload-artifact@v3
         with:
           name: btest-linux-x86_64
-          path: |
-            /tmp/btest-linux-x86_64.tar.gz
-            /tmp/btest-linux-x86_64.tar.gz.sha256
+          path: /artifacts/
 
   build-linux-aarch64:
-    runs-on: ubuntu-latest
+    runs_on: ubuntu-latest
     container:
       image: rust:1.86-slim
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install cross-compilation toolchain
+      - name: Install dependencies
         run: |
-          apt-get update && apt-get install -y --no-install-recommends \
-            musl-tools gcc-aarch64-linux-gnu
+          apt-get update && apt-get install -y --no-install-recommends git gcc-aarch64-linux-gnu
           rustup target add aarch64-unknown-linux-musl
-          mkdir -p .cargo
-          cat > .cargo/config.toml << 'EOF'
+
+      - name: Checkout
+        run: |
+          git config --global --add safe.directory '*'
+          git clone --depth 1 --branch ${GITHUB_REF_NAME} ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git /build
+
+      - name: Configure cross-linker
+        run: |
+          mkdir -p /build/.cargo
+          cat > /build/.cargo/config.toml << 'TOML'
           [target.aarch64-unknown-linux-musl]
           linker = "aarch64-linux-gnu-gcc"
           rustflags = ["-C", "target-feature=+crt-static"]
-          EOF
+          TOML
 
       - name: Build
         run: cargo build --release --target aarch64-unknown-linux-musl
+        working_directory: /build
 
       - name: Package
         run: |
-          cd target/aarch64-unknown-linux-musl/release
-          tar czf /tmp/btest-linux-aarch64.tar.gz btest
-          sha256sum /tmp/btest-linux-aarch64.tar.gz > /tmp/btest-linux-aarch64.tar.gz.sha256
+          mkdir -p /artifacts
+          cd /build/target/aarch64-unknown-linux-musl/release
+          tar czf /artifacts/btest-linux-aarch64.tar.gz btest
+          sha256sum /artifacts/btest-linux-aarch64.tar.gz > /artifacts/btest-linux-aarch64.tar.gz.sha256
 
       - name: Upload artifact
         uses: actions/upload-artifact@v3
         with:
           name: btest-linux-aarch64
-          path: |
-            /tmp/btest-linux-aarch64.tar.gz
-            /tmp/btest-linux-aarch64.tar.gz.sha256
+          path: /artifacts/
 
   build-linux-armv7:
-    runs-on: ubuntu-latest
+    runs_on: ubuntu-latest
     container:
       image: rust:1.86-slim
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install cross-compilation toolchain
+      - name: Install dependencies
         run: |
-          apt-get update && apt-get install -y --no-install-recommends \
-            musl-tools gcc-arm-linux-gnueabihf
+          apt-get update && apt-get install -y --no-install-recommends git gcc-arm-linux-gnueabihf
           rustup target add armv7-unknown-linux-musleabihf
-          mkdir -p .cargo
-          cat > .cargo/config.toml << 'EOF'
+
+      - name: Checkout
+        run: |
+          git config --global --add safe.directory '*'
+          git clone --depth 1 --branch ${GITHUB_REF_NAME} ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git /build
+
+      - name: Configure cross-linker
+        run: |
+          mkdir -p /build/.cargo
+          cat > /build/.cargo/config.toml << 'TOML'
           [target.armv7-unknown-linux-musleabihf]
           linker = "arm-linux-gnueabihf-gcc"
           rustflags = ["-C", "target-feature=+crt-static"]
-          EOF
+          TOML
 
       - name: Build
         run: cargo build --release --target armv7-unknown-linux-musleabihf
+        working_directory: /build
 
       - name: Package
         run: |
-          cd target/armv7-unknown-linux-musleabihf/release
-          tar czf /tmp/btest-linux-armv7.tar.gz btest
-          sha256sum /tmp/btest-linux-armv7.tar.gz > /tmp/btest-linux-armv7.tar.gz.sha256
+          mkdir -p /artifacts
+          cd /build/target/armv7-unknown-linux-musleabihf/release
+          tar czf /artifacts/btest-linux-armv7.tar.gz btest
+          sha256sum /artifacts/btest-linux-armv7.tar.gz > /artifacts/btest-linux-armv7.tar.gz.sha256
 
       - name: Upload artifact
         uses: actions/upload-artifact@v3
         with:
           name: btest-linux-armv7
-          path: |
-            /tmp/btest-linux-armv7.tar.gz
-            /tmp/btest-linux-armv7.tar.gz.sha256
-
-  build-macos:
-    runs-on: ubuntu-latest
-    container:
-      image: rust:1.86-slim
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install macOS cross-compilation toolchain
-        run: |
-          apt-get update && apt-get install -y --no-install-recommends \
-            clang cmake curl git libssl-dev libxml2-dev lzma-dev make patch xz-utils zlib1g-dev
-          rustup target add x86_64-apple-darwin aarch64-apple-darwin
-
-      - name: Install osxcross
-        run: |
-          git clone --depth 1 https://github.com/tpoechtrager/osxcross /tmp/osxcross
-          # Download macOS SDK (this needs a pre-packaged SDK tarball)
-          # If osxcross is not available, we skip and note in release
-          echo "macOS cross-compilation requires osxcross SDK setup"
-          echo "Binaries can be built natively on macOS: cargo build --release"
-        continue-on-error: true
-
-      - name: Create placeholder note
-        run: |
-          echo "macOS binaries must be built on a macOS host." > /tmp/macos-build-note.txt
-          echo "Run: cargo build --release" >> /tmp/macos-build-note.txt
-          echo "Binaries: target/release/btest" >> /tmp/macos-build-note.txt
-
-      - name: Upload note
-        uses: actions/upload-artifact@v3
-        with:
-          name: btest-macos-note
-          path: /tmp/macos-build-note.txt
+          path: /artifacts/
 
   release:
-    needs: [build-linux-x86_64, build-linux-aarch64, build-linux-armv7, build-macos]
-    runs-on: ubuntu-latest
+    needs: [build-linux-x86_64, build-linux-aarch64, build-linux-armv7]
+    runs_on: ubuntu-latest
     container:
       image: ubuntu:latest
     steps:
-      - uses: actions/checkout@v4
-
       - name: Install tools
-        run: apt-get update && apt-get install -y --no-install-recommends curl jq
+        run: apt-get update && apt-get install -y --no-install-recommends curl jq ca-certificates
 
       - name: Download all artifacts
         uses: actions/download-artifact@v3
         with:
-          path: artifacts
+          path: /artifacts
 
       - name: List artifacts
-        run: find artifacts -type f | sort
+        run: find /artifacts -type f | sort
 
-      - name: Create release
+      - name: Create release and upload
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITEA_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
-          TAG="${GITHUB_REF##*/}"
-          GITEA_URL="https://git.manko.yoga"
-          REPO="manawenuz/btest-rs"
+          TAG="${GITHUB_REF_NAME}"
+          GITEA_URL="${GITHUB_SERVER_URL}"
+          REPO="${GITHUB_REPOSITORY}"
 
-          # Determine which token to use
-          TOKEN="${GITEA_TOKEN:-$GITHUB_TOKEN}"
+          echo "Creating release ${TAG} for ${REPO}..."
 
-          # Create release via Gitea API
-          RELEASE_ID=$(curl -s -X POST \
+          # Create release
+          RELEASE_BODY="## btest-rs ${TAG}
+
+          ### Downloads
+
+          | Platform | Architecture | File |
+          |----------|-------------|------|
+          | Linux | x86_64 | btest-linux-x86_64.tar.gz |
+          | Linux | aarch64 (RPi 64-bit) | btest-linux-aarch64.tar.gz |
+          | Linux | armv7 (RPi 32-bit) | btest-linux-armv7.tar.gz |
+          | macOS | Build locally | \`cargo build --release\` |
+
+          ### Quick Install
+
+          \`\`\`bash
+          # Download and extract
+          tar xzf btest-linux-x86_64.tar.gz
+          sudo mv btest /usr/local/bin/
+
+          # Or use the systemd installer
+          sudo ./install-service.sh --auth-user admin --auth-pass password
+          \`\`\`"
+
+          RELEASE_ID=$(curl -sf -X POST \
             -H "Authorization: token ${TOKEN}" \
             -H "Content-Type: application/json" \
-            -d "{\"tag_name\": \"${TAG}\", \"name\": \"btest-rs ${TAG}\", \"body\": \"## Release ${TAG}\n\n### Downloads\n\n| Platform | Architecture | File |\n|----------|-------------|------|\n| Linux | x86_64 | btest-linux-x86_64.tar.gz |\n| Linux | aarch64 (RPi 64-bit) | btest-linux-aarch64.tar.gz |\n| Linux | armv7 (RPi 32-bit) | btest-linux-armv7.tar.gz |\n| macOS | Build from source | cargo build --release |\n\n### Install\n\n\\\`\\\`\\\`bash\ntar xzf btest-linux-x86_64.tar.gz\nsudo mv btest /usr/local/bin/\n\\\`\\\`\\\`\", \"draft\": false, \"prerelease\": false}" \
+            -d "$(jq -n --arg tag "$TAG" --arg name "btest-rs $TAG" --arg body "$RELEASE_BODY" \
+              '{tag_name: $tag, name: $name, body: $body, draft: false, prerelease: false}')" \
             "${GITEA_URL}/api/v1/repos/${REPO}/releases" | jq -r '.id')
 
           echo "Created release ID: ${RELEASE_ID}"
 
-          # Upload each artifact
-          for file in artifacts/btest-linux-*/*.tar.gz artifacts/btest-linux-*/*.sha256; do
+          # Upload each artifact file
+          for file in /artifacts/btest-linux-*/*.tar.gz /artifacts/btest-linux-*/*.sha256; do
             if [ -f "$file" ]; then
               FILENAME=$(basename "$file")
               echo "Uploading: ${FILENAME}"
-              curl -s -X POST \
+              curl -sf -X POST \
                 -H "Authorization: token ${TOKEN}" \
                 -F "attachment=@${file}" \
-                "${GITEA_URL}/api/v1/repos/${REPO}/releases/${RELEASE_ID}/assets?name=${FILENAME}"
+                "${GITEA_URL}/api/v1/repos/${REPO}/releases/${RELEASE_ID}/assets?name=${FILENAME}" \
+                | jq -r '.name'
             fi
           done
 
-          echo "Release ${TAG} created with artifacts"
+          echo "Release ${TAG} published!"
