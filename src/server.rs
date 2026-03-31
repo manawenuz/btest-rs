@@ -798,11 +798,14 @@ async fn udp_tx_loop(
                 }
             }
             None => {
-                // Unlimited: yield every 64 packets. On ENOBUFS-prone systems
-                // (IPv6, macOS), sleep briefly to let the kernel drain buffers.
-                if seq % 64 == 0 {
+                // "Unlimited" mode: still need minimal pacing to prevent
+                // macOS interface queue overflow (ENOBUFS).
+                // Yield every 16 packets; if errors seen, add real delay.
+                if seq % 16 == 0 {
                     if consecutive_errors > 0 {
-                        tokio::time::sleep(Duration::from_micros(500)).await;
+                        // Back off enough for the NIC to drain
+                        tokio::time::sleep(Duration::from_micros(50)).await;
+                        consecutive_errors = 0; // reset after yielding
                     } else {
                         tokio::task::yield_now().await;
                     }
