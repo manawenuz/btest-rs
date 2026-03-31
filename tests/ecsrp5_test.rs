@@ -10,7 +10,9 @@ async fn start_ecsrp5_server(port: u16) {
             port,
             Some("testuser".into()),
             Some("testpass".into()),
-            true, // ecsrp5
+            true,
+            Some("127.0.0.1".into()),
+            None,
         )
         .await;
     });
@@ -23,7 +25,9 @@ async fn start_md5_server(port: u16) {
             port,
             Some("testuser".into()),
             Some("testpass".into()),
-            false, // md5
+            false,
+            Some("127.0.0.1".into()),
+            None,
         )
         .await;
     });
@@ -32,7 +36,7 @@ async fn start_md5_server(port: u16) {
 
 async fn start_noauth_server(port: u16) {
     tokio::spawn(async move {
-        let _ = btest_rs::server::run_server(port, None, None, false).await;
+        let _ = btest_rs::server::run_server(port, None, None, false, Some("127.0.0.1".into()), None).await;
     });
     tokio::time::sleep(Duration::from_millis(200)).await;
 }

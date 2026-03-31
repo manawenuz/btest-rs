@@ -50,6 +50,14 @@ struct Cli {
     #[arg(short = 'P', long = "port", default_value_t = BTEST_PORT)]
     port: u16,
 
+    /// Listen address for IPv4 (default: 0.0.0.0, use "none" to disable)
+    #[arg(long = "listen", default_value = "0.0.0.0")]
+    listen_addr: String,
+
+    /// Listen address for IPv6 (default: ::, use "none" to disable)
+    #[arg(long = "listen6", default_value = "::")]
+    listen6_addr: String,
+
     /// Authentication username
     #[arg(short = 'a', long = "authuser")]
     auth_user: Option<String>,
@@ -101,8 +109,10 @@ async fn main() -> anyhow::Result<()> {
 
     if cli.server {
         // Server mode
+        let v4 = if cli.listen_addr.eq_ignore_ascii_case("none") { None } else { Some(cli.listen_addr) };
+        let v6 = if cli.listen6_addr.eq_ignore_ascii_case("none") { None } else { Some(cli.listen6_addr) };
         tracing::info!("Starting btest server on port {}", cli.port);
-        server::run_server(cli.port, cli.auth_user, cli.auth_pass, cli.ecsrp5).await?;
+        server::run_server(cli.port, cli.auth_user, cli.auth_pass, cli.ecsrp5, v4, v6).await?;
     } else if let Some(host) = cli.client {
         // Client mode - must specify at least one direction
         if !cli.transmit && !cli.receive {

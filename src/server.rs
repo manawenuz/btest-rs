@@ -27,10 +27,9 @@ pub async fn run_server(
     auth_user: Option<String>,
     auth_pass: Option<String>,
     use_ecsrp5: bool,
+    listen_v4: Option<String>,
+    listen_v6: Option<String>,
 ) -> Result<()> {
-    let addr = format!("0.0.0.0:{}", port);
-    let listener = TcpListener::bind(&addr).await?;
-
     // Pre-derive EC-SRP5 credentials if enabled
     let ecsrp5_creds = if use_ecsrp5 {
         match (auth_user.as_deref(), auth_pass.as_deref()) {
@@ -47,13 +46,62 @@ pub async fn run_server(
         None
     };
 
-    tracing::info!("btest server listening on {}", addr);
-
     let udp_port_offset = Arc::new(std::sync::atomic::AtomicU16::new(0));
     let sessions: SessionMap = Arc::new(Mutex::new(HashMap::new()));
 
+    // Bind IPv4 listener
+    let v4_listener = if let Some(ref addr) = listen_v4 {
+        let bind_addr = format!("{}:{}", addr, port);
+        match TcpListener::bind(&bind_addr).await {
+            Ok(l) => {
+                tracing::info!("Listening on {} (IPv4)", bind_addr);
+                Some(l)
+            }
+            Err(e) => {
+                tracing::error!("Failed to bind {}: {}", bind_addr, e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Bind IPv6 listener
+    let v6_listener = if let Some(ref addr) = listen_v6 {
+        let bind_addr = format!("[{}]:{}", addr, port);
+        match TcpListener::bind(&bind_addr).await {
+            Ok(l) => {
+                tracing::info!("Listening on {} (IPv6)", bind_addr);
+                Some(l)
+            }
+            Err(e) => {
+                tracing::error!("Failed to bind {}: {}", bind_addr, e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    if v4_listener.is_none() && v6_listener.is_none() {
+        return Err(crate::protocol::BtestError::Protocol(
+            "No listeners bound. Check --listen and --listen6 addresses.".into(),
+        ));
+    }
+
     loop {
-        let (stream, peer) = listener.accept().await?;
+        // Accept from whichever listener has a connection ready
+        let (stream, peer) = match (&v4_listener, &v6_listener) {
+            (Some(v4), Some(v6)) => {
+                tokio::select! {
+                    r = v4.accept() => r?,
+                    r = v6.accept() => r?,
+                }
+            }
+            (Some(v4), None) => v4.accept().await?,
+            (None, Some(v6)) => v6.accept().await?,
+            (None, None) => unreachable!(),
+        };
         tracing::info!("New connection from {}", peer);
 
         let auth_user = auth_user.clone();

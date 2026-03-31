@@ -8,7 +8,7 @@ async fn start_test_server(port: u16, auth_user: Option<&str>, auth_pass: Option
     let user = auth_user.map(String::from);
     let pass = auth_pass.map(String::from);
     tokio::spawn(async move {
-        let _ = btest_rs::server::run_server(port, user, pass, false).await;
+        let _ = btest_rs::server::run_server(port, user, pass, false, Some("127.0.0.1".into()), None).await;
     });
     tokio::time::sleep(Duration::from_millis(100)).await;
 }
