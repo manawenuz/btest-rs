@@ -135,7 +135,7 @@ See the [original protocol documentation](btest-opensource/README.md) for wire-f
 ## Known Limitations
 
 - **EC-SRP5 authentication** (RouterOS >= 6.43) is not yet supported for client mode. Server mode works fine with MD5 auth. Disable auth on the MikroTik btest server as a workaround.
-- **Connection Count must be 1** when MikroTik connects to this server. Multi-connection mode (`Connection Count > 1`) is not properly supported and will result in severely degraded throughput. Always set `Connection Count = 1` on the MikroTik client. Single-connection performance is excellent (1+ Gbps).
+- **Multi-connection UDP** is supported. MikroTik's multi-connection mode sends from multiple source ports which are all accepted by the server.
 
 ## Testing
 
