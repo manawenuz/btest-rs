@@ -25,6 +25,13 @@ jobs:
             armv7-unknown-linux-musleabihf \
             x86_64-pc-windows-gnu
 
+      - name: Install crane (OCI image tool)
+        run: |
+          CRANE_VERSION="0.20.3"
+          curl -sL "https://github.com/google/go-containerregistry/releases/download/v${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" \
+            | tar xz -C /usr/local/bin crane
+          crane version
+
       - name: Ensure code is present
         run: |
           git config --global --add safe.directory '*'
@@ -86,6 +93,41 @@ jobs:
           cat checksums-sha256.txt
           ls -lh
 
+      - name: Build and push Docker image
+        env:
+          TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          REGISTRY="git.manko.yoga"
+          IMAGE="${REGISTRY}/manawenuz/btest-rs"
+
+          # Authenticate crane with Gitea registry
+          echo "${TOKEN}" | crane auth login "${REGISTRY}" -u token --password-stdin
+
+          # Build OCI image from the static x86_64 binary
+          # Create a minimal layer with just the binary
+          mkdir -p /tmp/docker-root/usr/local/bin
+          cp target/x86_64-unknown-linux-musl/release/btest /tmp/docker-root/usr/local/bin/btest
+          chmod +x /tmp/docker-root/usr/local/bin/btest
+
+          # Create tarball layer
+          tar -cf /tmp/layer.tar -C /tmp/docker-root .
+
+          # Push as scratch-based image
+          crane append \
+            --base=scratch \
+            --new_layer=/tmp/layer.tar \
+            --new_tag="${IMAGE}:${TAG}" \
+            --set-entrypoint="/usr/local/bin/btest" \
+            --set-cmd="-s"
+
+          # Also tag as latest
+          crane tag "${IMAGE}:${TAG}" latest
+
+          echo "Docker image pushed:"
+          echo "  ${IMAGE}:${TAG}"
+          echo "  ${IMAGE}:latest"
+
       - name: Create release and upload
         env:
           TOKEN: ${{ secrets.RELEASE_TOKEN }}
@@ -93,6 +135,7 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           GITEA_URL="${GITHUB_SERVER_URL}"
           REPO="${GITHUB_REPOSITORY}"
+          REGISTRY="git.manko.yoga"
 
           RELEASE_BODY="## Downloads
 
@@ -103,10 +146,18 @@ jobs:
           | Linux | armv7 (RPi 32-bit) | btest-linux-armv7.tar.gz |
           | Windows | x86_64 | btest-windows-x86_64.zip |
           | macOS | aarch64 / x86_64 | Build locally or download after manual upload |
+          | Docker | x86_64 | \`docker pull ${REGISTRY}/manawenuz/btest-rs:${TAG}\` |
 
           ### Quick Install (Linux)
-          curl -L <release-url>/btest-linux-x86_64.tar.gz | tar xz
-          sudo mv btest /usr/local/bin/"
+          \`\`\`bash
+          tar xzf btest-linux-x86_64.tar.gz
+          sudo mv btest /usr/local/bin/
+          \`\`\`
+
+          ### Docker
+          \`\`\`bash
+          docker run --rm -p 2000:2000 -p 2001-2100:2001-2100/udp ${REGISTRY}/manawenuz/btest-rs:${TAG} -s -v
+          \`\`\`"
 
           RELEASE_ID=$(curl -sf -X POST \
             -H "Authorization: token ${TOKEN}" \
