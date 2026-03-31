@@ -469,6 +469,7 @@ pub async fn client_authenticate<S: AsyncReadExt + AsyncWriteExt + Unpin>(
 pub struct EcSrp5Credentials {
     salt: [u8; 16],
     x_gamma: [u8; 32],
+    gamma_parity: bool,
 }
 
 impl EcSrp5Credentials {
@@ -477,10 +478,11 @@ impl EcSrp5Credentials {
         let salt: [u8; 16] = rand::random();
         let w = WCurve::new();
         let i = w.gen_password_validator_priv(username, password, &salt);
-        let (x_gamma, _parity) = w.gen_public_key(&i);
+        let (x_gamma, parity) = w.gen_public_key(&i);
         Self {
             salt,
             x_gamma,
+            gamma_parity: parity != 0,
         }
     }
 }
@@ -555,7 +557,7 @@ pub async fn server_authenticate<S: AsyncReadExt + AsyncWriteExt + Unpin>(
     // gamma = lift_x(x_gamma, parity=1) — the raw validator public key point
     // (NOT redp1 — that's used for blinding W_b, not for verification)
     let w_a = w.lift_x(&BigUint::from_bytes_be(&x_w_a), x_w_a_parity);
-    let gamma = w.lift_x(&BigUint::from_bytes_be(&creds.x_gamma), true);
+    let gamma = w.lift_x(&BigUint::from_bytes_be(&creds.x_gamma), creds.gamma_parity);
     let j_gamma = gamma.scalar_mul(&j_int);
     let sum = w_a.add(&j_gamma);
     let z_point = sum.scalar_mul(&s_b_int);
