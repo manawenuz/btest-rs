@@ -6,15 +6,22 @@ on:
       - 'v*'
 
 jobs:
-  build-linux-x86_64:
+  release:
     runs_on: ubuntu-latest
     container:
       image: rust:1.86-slim
     steps:
       - name: Install dependencies
         run: |
-          apt-get update && apt-get install -y --no-install-recommends git musl-tools
-          rustup target add x86_64-unknown-linux-musl
+          apt-get update && apt-get install -y --no-install-recommends \
+            git curl jq ca-certificates \
+            musl-tools \
+            gcc-aarch64-linux-gnu \
+            gcc-arm-linux-gnueabihf
+          rustup target add \
+            x86_64-unknown-linux-musl \
+            aarch64-unknown-linux-musl \
+            armv7-unknown-linux-musleabihf
 
       - name: Ensure code is present
         run: |
@@ -24,124 +31,48 @@ jobs:
             cp -a /tmp/src/. .
           fi
 
-      - name: Build
-        run: cargo build --release --target x86_64-unknown-linux-musl
-
-      - name: Package
-        run: |
-          mkdir -p /artifacts
-          cd target/x86_64-unknown-linux-musl/release
-          tar czf /artifacts/btest-linux-x86_64.tar.gz btest
-          sha256sum /artifacts/btest-linux-x86_64.tar.gz > /artifacts/btest-linux-x86_64.tar.gz.sha256
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v3
-        with:
-          name: btest-linux-x86_64
-          path: /artifacts/
-
-  build-linux-aarch64:
-    runs_on: ubuntu-latest
-    container:
-      image: rust:1.86-slim
-    steps:
-      - name: Install dependencies
-        run: |
-          apt-get update && apt-get install -y --no-install-recommends git gcc-aarch64-linux-gnu
-          rustup target add aarch64-unknown-linux-musl
-
-      - name: Ensure code is present
-        run: |
-          git config --global --add safe.directory '*'
-          if [ ! -f "Cargo.toml" ]; then
-            git clone --depth 1 --branch ${GITHUB_REF_NAME} ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git /tmp/src
-            cp -a /tmp/src/. .
-          fi
-
-      - name: Configure cross-linker
+      - name: Configure cross-linkers
         run: |
           mkdir -p .cargo
           cat > .cargo/config.toml << 'TOML'
           [target.aarch64-unknown-linux-musl]
           linker = "aarch64-linux-gnu-gcc"
           rustflags = ["-C", "target-feature=+crt-static"]
-          TOML
 
-      - name: Build
-        run: cargo build --release --target aarch64-unknown-linux-musl
-
-      - name: Package
-        run: |
-          mkdir -p /artifacts
-          cd target/aarch64-unknown-linux-musl/release
-          tar czf /artifacts/btest-linux-aarch64.tar.gz btest
-          sha256sum /artifacts/btest-linux-aarch64.tar.gz > /artifacts/btest-linux-aarch64.tar.gz.sha256
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v3
-        with:
-          name: btest-linux-aarch64
-          path: /artifacts/
-
-  build-linux-armv7:
-    runs_on: ubuntu-latest
-    container:
-      image: rust:1.86-slim
-    steps:
-      - name: Install dependencies
-        run: |
-          apt-get update && apt-get install -y --no-install-recommends git gcc-arm-linux-gnueabihf
-          rustup target add armv7-unknown-linux-musleabihf
-
-      - name: Ensure code is present
-        run: |
-          git config --global --add safe.directory '*'
-          if [ ! -f "Cargo.toml" ]; then
-            git clone --depth 1 --branch ${GITHUB_REF_NAME} ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git /tmp/src
-            cp -a /tmp/src/. .
-          fi
-
-      - name: Configure cross-linker
-        run: |
-          mkdir -p .cargo
-          cat > .cargo/config.toml << 'TOML'
           [target.armv7-unknown-linux-musleabihf]
           linker = "arm-linux-gnueabihf-gcc"
           rustflags = ["-C", "target-feature=+crt-static"]
           TOML
 
-      - name: Build
+      - name: Build x86_64
+        run: cargo build --release --target x86_64-unknown-linux-musl
+
+      - name: Build aarch64
+        run: cargo build --release --target aarch64-unknown-linux-musl
+
+      - name: Build armv7
         run: cargo build --release --target armv7-unknown-linux-musleabihf
 
-      - name: Package
+      - name: Package all
         run: |
           mkdir -p /artifacts
+
+          cd target/x86_64-unknown-linux-musl/release
+          tar czf /artifacts/btest-linux-x86_64.tar.gz btest
+          cd -
+
+          cd target/aarch64-unknown-linux-musl/release
+          tar czf /artifacts/btest-linux-aarch64.tar.gz btest
+          cd -
+
           cd target/armv7-unknown-linux-musleabihf/release
           tar czf /artifacts/btest-linux-armv7.tar.gz btest
-          sha256sum /artifacts/btest-linux-armv7.tar.gz > /artifacts/btest-linux-armv7.tar.gz.sha256
+          cd -
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v3
-        with:
-          name: btest-linux-armv7
-          path: /artifacts/
-
-  release:
-    needs: [build-linux-x86_64, build-linux-aarch64, build-linux-armv7]
-    runs_on: ubuntu-latest
-    container:
-      image: ubuntu:latest
-    steps:
-      - name: Install tools
-        run: apt-get update && apt-get install -y --no-install-recommends curl jq ca-certificates
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v3
-        with:
-          path: /artifacts
-
-      - name: List artifacts
-        run: find /artifacts -type f | sort
+          cd /artifacts
+          sha256sum *.tar.gz > checksums-sha256.txt
+          cat checksums-sha256.txt
+          ls -lh
 
       - name: Create release and upload
         env:
@@ -151,27 +82,18 @@ jobs:
           GITEA_URL="${GITHUB_SERVER_URL}"
           REPO="${GITHUB_REPOSITORY}"
 
-          echo "Creating release ${TAG} for ${REPO}..."
-
-          RELEASE_BODY=$(cat << 'BODY'
-          ## Downloads
+          RELEASE_BODY="## Downloads
 
           | Platform | Architecture | File |
           |----------|-------------|------|
           | Linux | x86_64 | btest-linux-x86_64.tar.gz |
           | Linux | aarch64 (RPi 64-bit) | btest-linux-aarch64.tar.gz |
           | Linux | armv7 (RPi 32-bit) | btest-linux-armv7.tar.gz |
-          | macOS | Build locally | `cargo build --release` |
+          | macOS | Build locally | cargo build --release |
 
           ### Quick Install
-
-          ```bash
-          tar xzf btest-linux-x86_64.tar.gz
-          sudo mv btest /usr/local/bin/
-          sudo btest -s -a admin -p password
-          ```
-          BODY
-          )
+          curl -L <release-url>/btest-linux-x86_64.tar.gz | tar xz
+          sudo mv btest /usr/local/bin/"
 
           RELEASE_ID=$(curl -sf -X POST \
             -H "Authorization: token ${TOKEN}" \
@@ -182,16 +104,14 @@ jobs:
 
           echo "Created release ID: ${RELEASE_ID}"
 
-          for file in /artifacts/btest-linux-*/*.tar.gz /artifacts/btest-linux-*/*.sha256; do
-            if [ -f "$file" ]; then
-              FILENAME=$(basename "$file")
-              echo "Uploading: ${FILENAME}"
-              curl -sf -X POST \
-                -H "Authorization: token ${TOKEN}" \
-                -F "attachment=@${file}" \
-                "${GITEA_URL}/api/v1/repos/${REPO}/releases/${RELEASE_ID}/assets?name=${FILENAME}" \
-                | jq -r '.name'
-            fi
+          for file in /artifacts/*.tar.gz /artifacts/checksums-sha256.txt; do
+            FILENAME=$(basename "$file")
+            echo "Uploading: ${FILENAME}"
+            curl -sf -X POST \
+              -H "Authorization: token ${TOKEN}" \
+              -F "attachment=@${file}" \
+              "${GITEA_URL}/api/v1/repos/${REPO}/releases/${RELEASE_ID}/assets?name=${FILENAME}" \
+              | jq -r '.name // .message'
           done
 
           echo "Release ${TAG} published!"
