@@ -29,9 +29,10 @@ docker build -t "${IMAGE}:${TAG}" -t "${IMAGE}:latest" .
 echo ""
 echo "=== Pushing to ${REGISTRY_HOST} ==="
 
-# Login if needed (uses GITEA_TOKEN from .env)
+# Login if needed (uses GITEA_USER + GITEA_TOKEN from .env)
 if [[ -n "${GITEA_TOKEN:-}" ]]; then
-    echo "${GITEA_TOKEN}" | docker login "${REGISTRY_HOST}" -u token --password-stdin
+    DOCKER_USER="${GITEA_USER:?Set GITEA_USER in .env (your Gitea username)}"
+    echo "${GITEA_TOKEN}" | docker login "${REGISTRY_HOST}" -u "${DOCKER_USER}" --password-stdin
 fi
 
 docker push "${IMAGE}:${TAG}"
