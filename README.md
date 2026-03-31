@@ -149,6 +149,7 @@ btest -c 192.168.88.1 -r -a admin -p password
 
 ## Known Limitations
 
+- **IPv6 support is experimental** (`--listen6`). TCP over IPv6 works fully. UDP over IPv6 has issues on macOS due to kernel ENOBUFS limitations with `send_to()`. On Linux, IPv6 UDP works fine. IPv6 is disabled by default.
 - **Multi-connection UDP** is supported. MikroTik's multi-connection mode sends from multiple source ports which are all accepted by the server.
 
 ## Testing
