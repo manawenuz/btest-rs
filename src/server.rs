@@ -377,6 +377,7 @@ async fn run_tcp_multiconn_server(streams: Vec<TcpStream>, cmd: Command) -> Resu
     state.running.store(false, Ordering::SeqCst);
     for h in tx_handles { let _ = h.await; }
     for h in rx_handles { let _ = h.await; }
+    tracing::info!("TCP multi-connection test ended");
     Ok(())
 }
 
@@ -395,6 +396,7 @@ async fn tcp_tx_loop(
 
     while state.running.load(Ordering::Relaxed) {
         if writer.write_all(&packet).await.is_err() {
+            state.running.store(false, Ordering::SeqCst);
             break;
         }
         state.tx_bytes.fetch_add(tx_size as u64, Ordering::Relaxed);
@@ -425,7 +427,10 @@ async fn tcp_rx_loop(mut reader: tokio::net::tcp::OwnedReadHalf, state: Arc<Band
     let mut buf = vec![0u8; 65536];
     while state.running.load(Ordering::Relaxed) {
         match reader.read(&mut buf).await {
-            Ok(0) | Err(_) => break,
+            Ok(0) | Err(_) => {
+                state.running.store(false, Ordering::SeqCst);
+                break;
+            }
             Ok(n) => {
                 state.rx_bytes.fetch_add(n as u64, Ordering::Relaxed);
             }
