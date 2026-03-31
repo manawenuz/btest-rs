@@ -733,8 +733,11 @@ async fn udp_tx_loop(
                 state.tx_bytes.fetch_add(n as u64, Ordering::Relaxed);
                 consecutive_errors = 0;
             }
-            Err(_) => {
+            Err(e) => {
                 consecutive_errors += 1;
+                if consecutive_errors == 1 {
+                    tracing::warn!("UDP TX send error: {} (target={})", e, target);
+                }
                 if consecutive_errors > 1000 {
                     tracing::warn!("UDP TX: too many consecutive send errors, stopping");
                     break;
