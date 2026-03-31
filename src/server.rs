@@ -389,8 +389,7 @@ async fn tcp_tx_loop(
 ) {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let mut packet = vec![0u8; tx_size];
-    packet[0] = STATUS_MSG_TYPE;
+    let packet = vec![0u8; tx_size]; // TCP data is all zeros (no 0x07 header)
     let mut interval = bandwidth::calc_send_interval(tx_speed, tx_size as u16);
     let mut next_send = Instant::now();
 
