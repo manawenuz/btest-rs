@@ -12,6 +12,30 @@ jobs:
     container:
       image: rust:1.86-slim
     steps:
+      - name: Debug workspace
+        run: |
+          echo "PWD: $(pwd)"
+          echo "HOME: $HOME"
+          echo "GITHUB_WORKSPACE: ${GITHUB_WORKSPACE:-unset}"
+          ls -la .
+          ls -la .. || true
+          find / -name "Cargo.toml" 2>/dev/null | head -5 || true
+
+      - name: Install git
+        run: apt-get update && apt-get install -y --no-install-recommends git
+
+      - name: Checkout code
+        run: |
+          git config --global --add safe.directory '*'
+          if [ -f "Cargo.toml" ]; then
+            echo "Code already in workspace"
+          else
+            echo "Cloning repo..."
+            git clone --depth 1 ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git /tmp/src
+            cp -a /tmp/src/. .
+          fi
+          ls -la Cargo.toml
+
       - name: Run tests
         run: cargo test -- --test-threads=1
 
