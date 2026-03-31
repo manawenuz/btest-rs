@@ -1,0 +1,17 @@
+# Cross-compile for x86_64 Linux using an x86_64 builder (emulated via QEMU on ARM hosts)
+FROM --platform=linux/amd64 rust:1.86-slim AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    musl-tools \
+    && rustup target add x86_64-unknown-linux-musl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY src/ src/
+
+RUN cargo build --release --target x86_64-unknown-linux-musl
+
+# Extract the binary
+FROM scratch AS export
+COPY --from=builder /build/target/x86_64-unknown-linux-musl/release/btest /btest
