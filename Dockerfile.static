@@ -1,0 +1,18 @@
+# Minimal image from a pre-built static binary
+# Usage: docker build -f Dockerfile.static --build-arg BINARY=dist/btest .
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG BINARY=dist/btest
+COPY ${BINARY} /usr/local/bin/btest
+RUN chmod +x /usr/local/bin/btest
+
+EXPOSE 2000/tcp
+EXPOSE 2001-2100/udp
+EXPOSE 2257-2356/udp
+
+ENTRYPOINT ["btest"]
+CMD ["-s"]
