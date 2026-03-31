@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container:
+      image: rust:1.86-slim
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run tests
+        run: cargo test -- --test-threads=1
+
+      - name: Build release
+        run: cargo build --release
+
+      - name: Check binary
+        run: |
+          ls -lh target/release/btest
+          target/release/btest --version
