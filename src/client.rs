@@ -289,13 +289,19 @@ async fn udp_client_tx_loop(
                 state.tx_bytes.fetch_add(n as u64, Ordering::Relaxed);
                 consecutive_errors = 0;
             }
-            Err(_) => {
+            Err(e) => {
                 consecutive_errors += 1;
-                if consecutive_errors > 1000 {
+                if consecutive_errors == 1 {
+                    tracing::debug!("UDP TX send error: {} (target)", e);
+                }
+                if consecutive_errors > 50000 {
                     tracing::warn!("UDP TX: too many consecutive send errors, stopping");
                     break;
                 }
-                tokio::time::sleep(Duration::from_micros(200)).await;
+                let backoff = Duration::from_micros(
+                    (200 + consecutive_errors.min(5000) as u64 * 10).min(10000)
+                );
+                tokio::time::sleep(backoff).await;
                 continue;
             }
         }

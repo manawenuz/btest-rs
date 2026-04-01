@@ -1,0 +1,365 @@
+.\" btest-rs manual page
+.\" Generated for btest-rs v0.5.0
+.TH BTEST 1 "2026-03-31" "btest-rs 0.5.0" "User Commands"
+.SH NAME
+btest \- MikroTik Bandwidth Test server and client
+.SH SYNOPSIS
+.B btest
+.B \-s
+.RI [ OPTIONS ]
+.br
+.B btest
+.B \-c
+.I HOST
+.RB { \-t | \-r }
+.RI [ OPTIONS ]
+.SH DESCRIPTION
+.B btest
+is a Rust reimplementation of the MikroTik Bandwidth Test (btest) protocol.
+It can operate as a server (accepting connections from MikroTik RouterOS
+devices or other btest clients) or as a client (connecting to a MikroTik
+device's built-in bandwidth test server).
+.PP
+The server listens on TCP port 2000 by default. MikroTik devices connect
+to this port for handshake, authentication, and status exchange. UDP data
+transfer uses ports 2001 and above.
+.PP
+Both MD5 challenge-response (RouterOS < 6.43) and EC-SRP5 Curve25519
+(RouterOS >= 6.43) authentication are supported.
+.SH OPTIONS
+.SS "Mode Selection"
+.TP
+.BR \-s ", " \-\-server
+Run in server mode. Listen for incoming connections from MikroTik devices
+or other btest clients. Conflicts with
+.BR \-c .
+.TP
+.BI \-c " HOST" "\fR, \fP" \-\-client " HOST"
+Run in client mode, connecting to the specified
+.IR HOST .
+The host can be an IPv4 address, IPv6 address, or hostname. Conflicts with
+.BR \-s .
+.SS "Test Direction (client mode)"
+.TP
+.BR \-t ", " \-\-transmit
+Client transmits data to the server (upload test). Can be combined with
+.B \-r
+for bidirectional testing.
+.TP
+.BR \-r ", " \-\-receive
+Client receives data from the server (download test). Can be combined with
+.B \-t
+for bidirectional testing.
+.SS "Protocol and Transfer"
+.TP
+.BR \-u ", " \-\-udp
+Use UDP instead of TCP for data transfer. UDP uses separate data ports
+(2001+ server side, 2257+ client side) and exchanges status messages
+over the TCP control channel every second.
+.TP
+.BI \-b " BW" "\fR, \fP" \-\-bandwidth " BW"
+Target bandwidth limit for the test. Accepts suffixes:
+.B K
+(kilobits/sec),
+.B M
+(megabits/sec),
+.B G
+(gigabits/sec). Examples:
+.BR 100M ", " 1G ", " 500K .
+Default is 0 (unlimited).
+.TP
+.BI \-P " PORT" "\fR, \fP" \-\-port " PORT"
+TCP port to listen on in server mode or connect to in client mode.
+Default: 2000.
+.SS "Network Binding (server mode)"
+.TP
+.BI \-\-listen " ADDR"
+IPv4 address to bind the server listener to. Use
+.B none
+to disable IPv4 listening entirely (useful with
+.B \-\-listen6
+for IPv6-only mode). Default: 0.0.0.0.
+.TP
+.BI \-\-listen6 " \fR[\fPADDR\fR]\fP"
+Enable the IPv6 listener. If no address is given, binds to
+.BR :: .
+Experimental: TCP over IPv6 works fully on all platforms. UDP over IPv6
+has issues on macOS due to kernel ENOBUFS limitations. On Linux, IPv6 UDP
+works correctly.
+.SS "Authentication"
+.TP
+.BI \-a " USER" "\fR, \fP" \-\-authuser " USER"
+Authentication username. In server mode, connecting clients must provide
+this username. In client mode, this username is sent to the server.
+.TP
+.BI \-p " PASS" "\fR, \fP" \-\-authpass " PASS"
+Authentication password. In server mode, connecting clients must provide
+a matching password. In client mode, this password is used to authenticate
+with the server.
+.TP
+.B \-\-ecsrp5
+Use EC-SRP5 authentication (Curve25519 Weierstrass). In server mode, this
+causes the server to advertise EC-SRP5 instead of MD5 to connecting clients.
+Required for RouterOS >= 6.43 devices. In client mode, the authentication
+type is auto-detected from the server's response and this flag is not needed.
+.SS "Test Control"
+.TP
+.BI \-d " SECS" "\fR, \fP" \-\-duration " SECS"
+Test duration in seconds (client mode only). The client exits cleanly after
+the specified number of seconds. A value of 0 means unlimited (run until
+interrupted with Ctrl-C). Default: 0.
+.TP
+.BR \-n ", " \-\-nat
+NAT traversal mode. Sends an empty UDP probe packet to the server before
+starting the receive thread, opening a hole in NAT firewalls. Only relevant
+for UDP receive tests when the client is behind NAT.
+.SS "Logging and Output"
+.TP
+.BI \-\-csv " FILE"
+Output test results to a CSV file. Appends a row for each completed test.
+Creates the file with a header row if it does not exist. Columns:
+timestamp, host, port, protocol, direction, duration_s, tx_avg_mbps,
+rx_avg_mbps, tx_bytes, rx_bytes, lost_packets, auth_type.
+.TP
+.BR \-q ", " \-\-quiet
+Suppress per-second bandwidth output to the terminal. Useful in combination
+with
+.B \-\-csv
+for machine-readable-only output, or when running as a background service.
+.TP
+.BI \-\-syslog " HOST:PORT"
+Send structured log events to a remote syslog server via UDP. Uses RFC 3164
+(BSD syslog) format with facility local0. Events include AUTH_SUCCESS,
+AUTH_FAILURE, TEST_START, and TEST_END with detailed metadata.
+Example:
+.BR \-\-syslog\ 192.168.1.1:514 .
+.TP
+.BR \-v ", " \-\-verbose
+Increase log verbosity. Can be repeated for more detail:
+.RS
+.TP
+.B \-v
+Debug messages (connection lifecycle, authentication steps).
+.TP
+.B \-vv
+Trace messages (hex dumps of protocol exchange).
+.TP
+.B \-vvv
+Maximum verbosity.
+.RE
+.TP
+.BR \-h ", " \-\-help
+Print help information and exit.
+.TP
+.BR \-V ", " \-\-version
+Print version information and exit.
+.SH EXAMPLES
+.SS "Server Mode"
+Start a basic server with no authentication:
+.PP
+.RS
+.nf
+btest -s
+.fi
+.RE
+.PP
+Server with MD5 authentication:
+.PP
+.RS
+.nf
+btest -s -a admin -p password
+.fi
+.RE
+.PP
+Server with EC-SRP5 authentication (RouterOS >= 6.43):
+.PP
+.RS
+.nf
+btest -s -a admin -p password --ecsrp5
+.fi
+.RE
+.PP
+Server with syslog and CSV logging:
+.PP
+.RS
+.nf
+btest -s -a admin -p password --syslog 10.0.0.1:514 --csv /var/log/btest.csv
+.fi
+.RE
+.PP
+Server listening on IPv4 and IPv6:
+.PP
+.RS
+.nf
+btest -s --listen6
+.fi
+.RE
+.PP
+Server on a custom port with debug output:
+.PP
+.RS
+.nf
+btest -s -P 3000 -v
+.fi
+.RE
+.SS "Client Mode"
+TCP download test:
+.PP
+.RS
+.nf
+btest -c 192.168.88.1 -r
+.fi
+.RE
+.PP
+TCP upload test:
+.PP
+.RS
+.nf
+btest -c 192.168.88.1 -t
+.fi
+.RE
+.PP
+Bidirectional TCP test:
+.PP
+.RS
+.nf
+btest -c 192.168.88.1 -t -r
+.fi
+.RE
+.PP
+UDP download test:
+.PP
+.RS
+.nf
+btest -c 192.168.88.1 -r -u
+.fi
+.RE
+.PP
+UDP bidirectional with bandwidth limit:
+.PP
+.RS
+.nf
+btest -c 192.168.88.1 -t -r -u -b 100M
+.fi
+.RE
+.PP
+Timed test (30 seconds) with CSV output:
+.PP
+.RS
+.nf
+btest -c 192.168.88.1 -r -d 30 --csv results.csv
+.fi
+.RE
+.PP
+Quiet mode with CSV only:
+.PP
+.RS
+.nf
+btest -c 192.168.88.1 -r -d 60 --csv results.csv -q
+.fi
+.RE
+.PP
+With authentication:
+.PP
+.RS
+.nf
+btest -c 192.168.88.1 -r -a admin -p password
+.fi
+.RE
+.PP
+UDP receive through NAT:
+.PP
+.RS
+.nf
+btest -c 192.168.88.1 -r -u -n
+.fi
+.RE
+.SH PORTS
+.TP
+.B 2000/tcp
+Control channel. Used for handshake, authentication, and status exchange.
+.TP
+.B 2001-2100/udp
+Server-side UDP data ports. Each connection uses the next available port
+starting from 2001.
+.TP
+.B 2257-2356/udp
+Client-side UDP data ports. Offset from server port by 256.
+.SH EXIT STATUS
+.TP
+.B 0
+Success. The test completed normally or the duration expired.
+.TP
+.B 1
+Error. Failed to connect, authentication failed, or invalid arguments.
+.SH ENVIRONMENT
+.TP
+.B RUST_LOG
+Override the log filter. When set, takes precedence over the
+.B \-v
+flag. Example:
+.BR RUST_LOG=trace .
+.SH FILES
+.TP
+.I /usr/local/bin/btest
+Default installation path for the binary.
+.TP
+.I /etc/systemd/system/btest.service
+systemd unit file created by the install-service.sh script.
+.SH AUTHENTICATION
+.B btest
+supports two authentication schemes:
+.TP
+.B MD5 (legacy)
+Double MD5 challenge-response. Compatible with RouterOS versions before 6.43.
+The server sends a 16-byte random challenge. The client responds with
+MD5(password + MD5(password + challenge)) and the username.
+.TP
+.B EC-SRP5 (modern)
+Elliptic Curve Secure Remote Password using Curve25519 in Weierstrass form.
+Used by RouterOS >= 6.43. Provides zero-knowledge password proof. Enable on
+the server with
+.BR \-\-ecsrp5 .
+Clients auto-detect the authentication type.
+.SH MIKROTIK CONFIGURATION
+Enable the bandwidth test server on MikroTik for client mode:
+.PP
+.RS
+.nf
+/tool/bandwidth-server set enabled=yes
+.fi
+.RE
+.PP
+Run a test from MikroTik connecting to a btest-rs server:
+.PP
+.RS
+.nf
+/tool/bandwidth-test address=<server-ip> direction=both \\
+    protocol=udp user=admin password=password
+.fi
+.RE
+.SH SEE ALSO
+.BR iperf3 (1),
+.BR netperf (1)
+.PP
+Project documentation:
+.I https://github.com/samm-git/btest-opensource
+.SH CREDITS
+.B btest-opensource
+by Alex Samorukov \(em original C implementation and protocol
+reverse-engineering (MIT License).
+.PP
+.B Margin Research
+\(em EC-SRP5 authentication reverse-engineering for MikroTik RouterOS
+(Apache License 2.0).
+.PP
+.B MikroTik
+\(em creator of the bandwidth test protocol and RouterOS.
+.SH LICENSE
+MIT License. See the LICENSE file in the source distribution.
+.PP
+This project is derived from btest-opensource (MIT License, Copyright 2016
+Alex Samorukov). The EC-SRP5 implementation is based on research by Margin
+Research (Apache License 2.0).
+.SH AUTHORS
+btest-rs contributors.

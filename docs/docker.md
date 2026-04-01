@@ -1,26 +1,42 @@
-# Docker & Deployment Guide
+# Docker and Deployment Guide
 
 ## Container Registry
 
 Images are published to:
+
 ```
 git.manko.yoga/manawenuz/btest-rs
 ```
 
-## Quick Run (Ephemeral)
+## Quick Start
 
-### Server (one-liner)
+### Docker Compose (recommended)
 
 ```bash
-# Build and run server directly
+# Server with no authentication
+docker compose up -d
+
+# Server with authentication
+docker compose --profile auth up -d
+
+# View logs
+docker compose logs -f
+```
+
+### One-liner server
+
+```bash
 docker build -t btest-rs . && \
 docker run --rm -it \
   -p 2000:2000/tcp \
   -p 2001-2100:2001-2100/udp \
   -p 2257-2356:2257-2356/udp \
   btest-rs -s -v
+```
 
-# With authentication
+### One-liner server with authentication
+
+```bash
 docker run --rm -it \
   -p 2000:2000/tcp \
   -p 2001-2100:2001-2100/udp \
@@ -28,7 +44,28 @@ docker run --rm -it \
   btest-rs -s -a admin -p password -v
 ```
 
-### Client (one-liner)
+### Server with EC-SRP5 authentication
+
+```bash
+docker run --rm -it \
+  -p 2000:2000/tcp \
+  -p 2001-2100:2001-2100/udp \
+  -p 2257-2356:2257-2356/udp \
+  btest-rs -s -a admin -p password --ecsrp5 -v
+```
+
+### Server with syslog and CSV
+
+```bash
+docker run --rm -it \
+  -p 2000:2000/tcp \
+  -p 2001-2100:2001-2100/udp \
+  -p 2257-2356:2257-2356/udp \
+  -v /var/log/btest:/data \
+  btest-rs -s -a admin -p password --syslog 192.168.1.1:514 --csv /data/results.csv -v
+```
+
+### Client mode
 
 ```bash
 # TCP download test against MikroTik
@@ -36,6 +73,14 @@ docker run --rm -it btest-rs -c 192.168.88.1 -r
 
 # UDP bidirectional
 docker run --rm -it btest-rs -c 192.168.88.1 -t -r -u
+
+# Timed test with CSV output
+docker run --rm -it \
+  -v $(pwd):/data \
+  btest-rs -c 192.168.88.1 -r -d 30 --csv /data/results.csv
+
+# With authentication
+docker run --rm -it btest-rs -c 192.168.88.1 -r -a admin -p password
 ```
 
 ### Using pre-built image from registry
@@ -54,17 +99,23 @@ docker run --rm -it \
 
 ## Docker Compose
 
-### Basic server
+The `docker-compose.yml` file provides two service profiles:
+
+### Default profile (no auth)
 
 ```bash
 docker compose up -d
 ```
 
-### Server with authentication
+Starts a server on port 2000 with verbose logging and no authentication.
+
+### Auth profile
 
 ```bash
 docker compose --profile auth up -d
 ```
+
+Starts an additional server on port 2010 with MD5 authentication (user: admin, password: password).
 
 ### docker-compose.yml
 
@@ -94,7 +145,23 @@ services:
       - auth
 ```
 
-## Building
+## Dockerfile
+
+The production Dockerfile uses a multi-stage build:
+
+1. **Build stage** -- Rust 1.86 slim image, compiles a release binary
+2. **Runtime stage** -- Debian Bookworm slim, copies only the binary
+
+The resulting image is approximately 80 MB. The binary itself is about 2 MB.
+
+Exposed ports:
+- `2000/tcp` -- control channel
+- `2001-2100/udp` -- server-side data ports
+- `2257-2356/udp` -- client-side data ports
+
+Default entrypoint: `btest -s`
+
+## Building Images
 
 ### Local build (native)
 
@@ -107,24 +174,23 @@ cargo build --release
 
 ```bash
 scripts/build-linux.sh
-# Binary at: dist/btest (static musl, 2 MB)
+# Binary at: dist/btest (static musl, ~2 MB)
 ```
 
 ### Docker image build
 
 ```bash
-# Production image (for running)
+# Production image
 docker build -t btest-rs .
 
 # With custom tag
 docker build -t git.manko.yoga/manawenuz/btest-rs:latest .
-docker build -t git.manko.yoga/manawenuz/btest-rs:0.1.0 .
+docker build -t git.manko.yoga/manawenuz/btest-rs:0.5.0 .
 ```
 
 ### Multi-platform build
 
 ```bash
-# Build for both ARM64 and x86_64
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
   -t git.manko.yoga/manawenuz/btest-rs:latest \
@@ -143,13 +209,13 @@ docker push git.manko.yoga/manawenuz/btest-rs:latest
 
 # Also tag with version
 docker tag git.manko.yoga/manawenuz/btest-rs:latest \
-           git.manko.yoga/manawenuz/btest-rs:0.1.0
-docker push git.manko.yoga/manawenuz/btest-rs:0.1.0
+           git.manko.yoga/manawenuz/btest-rs:0.5.0
+docker push git.manko.yoga/manawenuz/btest-rs:0.5.0
 ```
 
-## Deployment on Linux Server
+## Deployment Options
 
-### Option 1: Docker
+### Option 1: Docker (single container)
 
 ```bash
 docker run -d --name btest-server \
@@ -158,7 +224,7 @@ docker run -d --name btest-server \
   -p 2001-2100:2001-2100/udp \
   -p 2257-2356:2257-2356/udp \
   git.manko.yoga/manawenuz/btest-rs:latest \
-  -s -a admin -p password -v
+  -s -a admin -p password --ecsrp5 -v
 ```
 
 ### Option 2: Static binary + systemd
@@ -167,9 +233,26 @@ docker run -d --name btest-server \
 # Copy binary to server
 scp dist/btest root@server:/usr/local/bin/btest
 
-# Copy and run installer
+# Run the installer
 scp scripts/install-service.sh root@server:/tmp/
 ssh root@server "bash /tmp/install-service.sh --auth-user admin --auth-pass password"
+```
+
+The installer script:
+- Creates a dedicated `btest` system user
+- Installs a hardened systemd unit with security options (NoNewPrivileges, ProtectSystem, PrivateTmp)
+- Grants `CAP_NET_BIND_SERVICE` for binding to ports below 1024
+- Enables and starts the service
+- Supports `--auth-user`, `--auth-pass`, and `--port` options
+
+Useful systemd commands after installation:
+
+```bash
+systemctl status btest       # Check status
+systemctl stop btest         # Stop the service
+systemctl restart btest      # Restart
+journalctl -u btest -f       # Follow logs
+systemctl disable btest      # Disable autostart
 ```
 
 ### Option 3: Docker Compose on server
@@ -183,9 +266,9 @@ ssh root@server "cd /opt/btest-rs && docker compose up -d"
 
 | Port | Protocol | Purpose |
 |------|----------|---------|
-| 2000 | TCP | Control channel (handshake, auth, status) |
+| 2000 | TCP | Control channel (handshake, auth, status exchange) |
 | 2001-2100 | UDP | Server-side data ports |
-| 2257-2356 | UDP | Client-side data ports (2001+256) |
+| 2257-2356 | UDP | Client-side data ports (server_port + 256) |
 
 ### Firewall rules (iptables)
 
@@ -203,20 +286,35 @@ ufw allow 2001:2100/udp
 ufw allow 2257:2356/udp
 ```
 
+### Firewall rules (nftables)
+
+```bash
+nft add rule inet filter input tcp dport 2000 accept
+nft add rule inet filter input udp dport 2001-2100 accept
+nft add rule inet filter input udp dport 2257-2356 accept
+```
+
 ## Health Check
 
 ```bash
-# Check if server is responding
+# Check if server is responding (TCP handshake)
 nc -zv <server-ip> 2000
 
-# Check Docker container
+# Check Docker container status
 docker logs btest-server
-docker exec btest-server ps aux
+docker ps --filter name=btest-server
+
+# Check systemd service
+systemctl status btest
+journalctl -u btest --since "5 minutes ago"
 ```
 
 ## Resource Usage
 
-- **Memory**: ~5 MB base, +1 MB per active connection
-- **CPU**: Minimal when idle, scales with bandwidth
-- **Binary size**: 2 MB (static musl build)
-- **Docker image**: ~80 MB (Debian slim + binary)
+| Resource | Value |
+|----------|-------|
+| Memory (idle) | ~5 MB |
+| Memory (per active connection) | +1 MB |
+| CPU | Minimal when idle, scales with bandwidth |
+| Binary size | ~2 MB (static musl build) |
+| Docker image | ~80 MB (Debian slim + binary) |

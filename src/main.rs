@@ -172,6 +172,9 @@ async fn main() -> anyhow::Result<()> {
         };
         let proto_str = if cli.udp { "UDP" } else { "TCP" };
 
+        // Log test start
+        syslog_logger::test_start(&host, proto_str, dir_str, 0);
+
         // Run client with optional duration timeout
         let start = std::time::Instant::now();
         let client_fut = client::run_client(
@@ -204,10 +207,15 @@ async fn main() -> anyhow::Result<()> {
 
         let elapsed = start.elapsed().as_secs();
 
+        // Log test end to syslog
+        syslog_logger::test_end(
+            &host, proto_str, dir_str,
+            0, 0, 0, elapsed as u32,
+        );
+
         // Write CSV if enabled
         if csv_output::is_enabled() {
             let auth_type = if cli.auth_user.is_some() { "auth" } else { "none" };
-            // For client mode we don't track detailed stats yet, but duration is useful
             csv_output::write_result(
                 &host, cli.port, proto_str, dir_str,
                 elapsed, 0, 0, 0, auth_type,
