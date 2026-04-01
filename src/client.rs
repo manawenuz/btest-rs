@@ -10,7 +10,6 @@ use crate::auth;
 use crate::bandwidth::{self, BandwidthState};
 use crate::protocol::*;
 
-/// Returns (total_tx_bytes, total_rx_bytes, total_lost_packets, duration_secs).
 pub async fn run_client(
     host: &str,
     port: u16,
@@ -21,7 +20,8 @@ pub async fn run_client(
     auth_user: Option<String>,
     auth_pass: Option<String>,
     nat_mode: bool,
-) -> Result<(u64, u64, u64, u32)> {
+    shared_state: Arc<BandwidthState>,
+) -> Result<()> {
     let addr = format!("{}:{}", host, port);
     tracing::info!("Connecting to {}...", addr);
     let mut stream = TcpStream::connect(&addr).await?;
@@ -91,16 +91,15 @@ pub async fn run_client(
     );
 
     if use_udp {
-        run_udp_test_client(&mut stream, host, &cmd, nat_mode).await
+        run_udp_test_client(&mut stream, host, &cmd, nat_mode, shared_state).await
     } else {
-        run_tcp_test_client(stream, cmd).await
+        run_tcp_test_client(stream, cmd, shared_state).await
     }
 }
 
 // --- TCP Test Client ---
 
-async fn run_tcp_test_client(stream: TcpStream, cmd: Command) -> Result<(u64, u64, u64, u32)> {
-    let state = BandwidthState::new();
+async fn run_tcp_test_client(stream: TcpStream, cmd: Command, state: Arc<BandwidthState>) -> Result<()> {
     let tx_size = cmd.tx_size as usize;
     let client_should_tx = cmd.client_tx();
     let client_should_rx = cmd.client_rx();
@@ -138,7 +137,7 @@ async fn run_tcp_test_client(stream: TcpStream, cmd: Command) -> Result<(u64, u6
     state.running.store(false, Ordering::SeqCst);
     if let Some(h) = tx_handle { let _ = h.await; }
     if let Some(h) = rx_handle { let _ = h.await; }
-    Ok(state.summary())
+    Ok(())
 }
 
 async fn tcp_client_tx_loop(
@@ -203,7 +202,8 @@ async fn run_udp_test_client(
     host: &str,
     cmd: &Command,
     nat_mode: bool,
-) -> Result<(u64, u64, u64, u32)> {
+    state: Arc<BandwidthState>,
+) -> Result<()> {
     let mut port_buf = [0u8; 2];
     stream.read_exact(&mut port_buf).await?;
     let server_udp_port = u16::from_be_bytes(port_buf);
@@ -234,7 +234,6 @@ async fn run_udp_test_client(
         udp.send(&[]).await?;
     }
 
-    let state = BandwidthState::new();
     let tx_size = cmd.tx_size as usize;
     let client_should_tx = cmd.client_tx();
     let client_should_rx = cmd.client_rx();
@@ -266,7 +265,7 @@ async fn run_udp_test_client(
     state.running.store(false, Ordering::SeqCst);
     if let Some(h) = tx_handle { let _ = h.await; }
     if let Some(h) = rx_handle { let _ = h.await; }
-    Ok(state.summary())
+    Ok(())
 }
 
 async fn udp_client_tx_loop(

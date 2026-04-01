@@ -85,6 +85,7 @@ async fn test_ecsrp5_full_client_auth() {
             Some("testuser".into()),
             Some("testpass".into()),
             false,
+            btest_rs::bandwidth::BandwidthState::new(),
         )
         .await
     });
@@ -109,6 +110,7 @@ async fn test_ecsrp5_wrong_password_fails() {
         Some("testuser".into()),
         Some("wrongpass".into()),
         false,
+        btest_rs::bandwidth::BandwidthState::new(),
     )
     .await;
 
@@ -131,6 +133,7 @@ async fn test_md5_auth_still_works() {
             Some("testuser".into()),
             Some("testpass".into()),
             false,
+            btest_rs::bandwidth::BandwidthState::new(),
         )
         .await
     });
@@ -155,6 +158,7 @@ async fn test_noauth_still_works() {
             None,
             None,
             false,
+            btest_rs::bandwidth::BandwidthState::new(),
         )
         .await
     });
@@ -179,6 +183,7 @@ async fn test_ecsrp5_udp_bidirectional() {
             Some("testuser".into()),
             Some("testpass".into()),
             false,
+            btest_rs::bandwidth::BandwidthState::new(),
         )
         .await
     });

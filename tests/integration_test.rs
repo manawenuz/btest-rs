@@ -153,6 +153,7 @@ async fn test_loopback_tcp_rx() {
             None,
             None,
             false,
+            btest_rs::bandwidth::BandwidthState::new(),
         )
         .await
     });
@@ -177,6 +178,7 @@ async fn test_loopback_tcp_tx() {
             None,
             None,
             false,
+            btest_rs::bandwidth::BandwidthState::new(),
         )
         .await
     });
@@ -201,6 +203,7 @@ async fn test_loopback_tcp_both() {
             None,
             None,
             false,
+            btest_rs::bandwidth::BandwidthState::new(),
         )
         .await
     });
@@ -225,6 +228,7 @@ async fn test_loopback_tcp_with_auth() {
             Some("admin".into()),
             Some("secret".into()),
             false,
+            btest_rs::bandwidth::BandwidthState::new(),
         )
         .await
     });

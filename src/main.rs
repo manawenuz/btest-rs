@@ -172,6 +172,9 @@ async fn main() -> anyhow::Result<()> {
         };
         let proto_str = if cli.udp { "UDP" } else { "TCP" };
 
+        // Create shared state that survives timeout cancellation
+        let shared_state = bandwidth::BandwidthState::new();
+
         // Log test start
         syslog_logger::test_start(&host, proto_str, dir_str, 0);
 
@@ -187,24 +190,28 @@ async fn main() -> anyhow::Result<()> {
             cli.auth_user.clone(),
             cli.auth_pass.clone(),
             cli.nat,
+            shared_state.clone(),
         );
 
-        let stats = if cli.duration > 0 {
+        if cli.duration > 0 {
             match tokio::time::timeout(
                 std::time::Duration::from_secs(cli.duration),
                 client_fut,
             )
             .await
             {
-                Ok(result) => Some(result?),
-                Err(_) => None, // Timeout — stats not available from aborted future
+                Ok(result) => { let _ = result?; },
+                Err(_) => {
+                    // Timeout — signal stop
+                    shared_state.running.store(false, std::sync::atomic::Ordering::SeqCst);
+                }
             }
         } else {
-            Some(client_fut.await?)
-        };
+            let _ = client_fut.await?;
+        }
 
         let elapsed = start.elapsed().as_secs();
-        let (total_tx, total_rx, total_lost, _intervals) = stats.unwrap_or((0, 0, 0, 0));
+        let (total_tx, total_rx, total_lost, _intervals) = shared_state.summary();
 
         // Log test end to syslog
         syslog_logger::test_end(
