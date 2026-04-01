@@ -1,6 +1,7 @@
 mod auth;
 mod bandwidth;
 mod client;
+pub mod csv_output;
 mod ecsrp5;
 mod protocol;
 mod server;
@@ -74,6 +75,18 @@ struct Cli {
     #[arg(short = 'n', long = "nat")]
     nat: bool,
 
+    /// Test duration in seconds (client mode, 0=unlimited)
+    #[arg(short = 'd', long = "duration", default_value_t = 0)]
+    duration: u64,
+
+    /// Output results to CSV file (appends if exists)
+    #[arg(long = "csv")]
+    csv: Option<String>,
+
+    /// Suppress terminal output (use with --csv for machine-readable only)
+    #[arg(long = "quiet", short = 'q')]
+    quiet: bool,
+
     /// Send logs to remote syslog server (e.g., 192.168.1.1:514)
     #[arg(long = "syslog")]
     syslog: Option<String>,
@@ -106,6 +119,14 @@ async fn main() -> anyhow::Result<()> {
             eprintln!("Warning: failed to initialize syslog to {}: {}", syslog_addr, e);
         }
     }
+
+    // Initialize CSV output if requested
+    if let Some(ref csv_path) = cli.csv {
+        if let Err(e) = csv_output::init(csv_path) {
+            eprintln!("Warning: failed to initialize CSV output to {}: {}", csv_path, e);
+        }
+    }
+    csv_output::set_quiet(cli.quiet);
 
     if cli.server {
         // Server mode
@@ -143,18 +164,55 @@ async fn main() -> anyhow::Result<()> {
             _ => (0, 0),
         };
 
-        client::run_client(
+        let dir_str = match direction {
+            CMD_DIR_RX => "send",
+            CMD_DIR_TX => "receive",
+            CMD_DIR_BOTH => "both",
+            _ => "unknown",
+        };
+        let proto_str = if cli.udp { "UDP" } else { "TCP" };
+
+        // Run client with optional duration timeout
+        let start = std::time::Instant::now();
+        let client_fut = client::run_client(
             &host,
             cli.port,
             direction,
             cli.udp,
             tx_speed,
             rx_speed,
-            cli.auth_user,
-            cli.auth_pass,
+            cli.auth_user.clone(),
+            cli.auth_pass.clone(),
             cli.nat,
-        )
-        .await?;
+        );
+
+        if cli.duration > 0 {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(cli.duration),
+                client_fut,
+            )
+            .await
+            {
+                Ok(result) => result?,
+                Err(_) => {
+                    // Timeout — normal exit
+                }
+            }
+        } else {
+            client_fut.await?;
+        }
+
+        let elapsed = start.elapsed().as_secs();
+
+        // Write CSV if enabled
+        if csv_output::is_enabled() {
+            let auth_type = if cli.auth_user.is_some() { "auth" } else { "none" };
+            // For client mode we don't track detailed stats yet, but duration is useful
+            csv_output::write_result(
+                &host, cli.port, proto_str, dir_str,
+                elapsed, 0, 0, 0, auth_type,
+            );
+        }
     } else {
         eprintln!("Error: Must specify either -s (server) or -c <host> (client)");
         eprintln!("Run with --help for usage information.");

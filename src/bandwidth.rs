@@ -123,6 +123,10 @@ pub fn print_status(
     elapsed: Duration,
     lost_packets: Option<u64>,
 ) {
+    if crate::csv_output::is_quiet() {
+        return;
+    }
+
     let secs = elapsed.as_secs_f64();
     let bits = bytes as f64 * 8.0;
     let bw = if secs > 0.0 { bits / secs } else { 0.0 };
