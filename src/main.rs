@@ -189,28 +189,27 @@ async fn main() -> anyhow::Result<()> {
             cli.nat,
         );
 
-        if cli.duration > 0 {
+        let stats = if cli.duration > 0 {
             match tokio::time::timeout(
                 std::time::Duration::from_secs(cli.duration),
                 client_fut,
             )
             .await
             {
-                Ok(result) => result?,
-                Err(_) => {
-                    // Timeout — normal exit
-                }
+                Ok(result) => Some(result?),
+                Err(_) => None, // Timeout — stats not available from aborted future
             }
         } else {
-            client_fut.await?;
-        }
+            Some(client_fut.await?)
+        };
 
         let elapsed = start.elapsed().as_secs();
+        let (total_tx, total_rx, total_lost, _intervals) = stats.unwrap_or((0, 0, 0, 0));
 
         // Log test end to syslog
         syslog_logger::test_end(
             &host, proto_str, dir_str,
-            0, 0, 0, elapsed as u32,
+            total_tx, total_rx, total_lost, elapsed as u32,
         );
 
         // Write CSV if enabled
@@ -218,7 +217,7 @@ async fn main() -> anyhow::Result<()> {
             let auth_type = if cli.auth_user.is_some() { "auth" } else { "none" };
             csv_output::write_result(
                 &host, cli.port, proto_str, dir_str,
-                elapsed, 0, 0, 0, auth_type,
+                elapsed, total_tx, total_rx, total_lost, auth_type,
             );
         }
     } else {
