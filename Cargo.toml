@@ -16,6 +16,14 @@ path = "src/lib.rs"
 name = "btest"
 path = "src/main.rs"
 
+[[bin]]
+name = "btest-client"
+path = "src/bin/client_only.rs"
+
+[[bin]]
+name = "btest-server"
+path = "src/bin/server_only.rs"
+
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive"] }
@@ -38,3 +46,9 @@ opt-level = 3
 lto = true
 strip = true
 codegen-units = 1
+
+# Minimal size profile for embedded/OpenWrt targets
+[profile.release-small]
+inherits = "release"
+opt-level = "z"
+panic = "abort"
