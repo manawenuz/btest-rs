@@ -536,7 +536,7 @@ async fn tcp_tx_loop_inner(
         if send_status && Instant::now() >= next_status {
             status_seq += 1;
             let rx_bytes = state.rx_bytes.swap(0, Ordering::Relaxed);
-            let status = StatusMessage {
+            let status = StatusMessage { cpu_load: crate::cpu::get(),
                 seq: status_seq,
                 bytes_received: rx_bytes as u32,
             };
@@ -615,7 +615,7 @@ async fn tcp_status_sender(
         // Swap to get bytes received this interval (atomic reset)
         let rx_bytes = state.rx_bytes.swap(0, Ordering::Relaxed);
 
-        let status = StatusMessage {
+        let status = StatusMessage { cpu_load: crate::cpu::get(),
             seq,
             bytes_received: rx_bytes as u32,
         };
@@ -925,9 +925,10 @@ async fn udp_status_loop(
         match tokio::time::timeout(wait_time, reader.read_exact(&mut status_buf)).await {
             Ok(Ok(_)) => {
                 let client_status = StatusMessage::deserialize(&status_buf);
+                state.remote_cpu.store(client_status.cpu_load, Ordering::Relaxed);
                 tracing::debug!(
-                    "RECV status: raw={:02x?} seq={} bytes_received={}",
-                    &status_buf, client_status.seq, client_status.bytes_received,
+                    "RECV status: raw={:02x?} seq={} bytes_received={} cpu={}%",
+                    &status_buf, client_status.seq, client_status.bytes_received, client_status.cpu_load,
                 );
 
                 if client_status.bytes_received > 0 && cmd.server_tx() {
@@ -972,7 +973,7 @@ async fn udp_status_loop(
         } else {
             rx_bytes
         };
-        let status = StatusMessage {
+        let status = StatusMessage { cpu_load: crate::cpu::get(),
             seq,
             bytes_received: report_bytes as u32,
         };
@@ -990,10 +991,14 @@ async fn udp_status_loop(
         // Print local stats and record totals
         state.record_interval(tx_bytes, rx_bytes, lost);
         if cmd.server_tx() {
-            bandwidth::print_status(seq, "TX", tx_bytes, Duration::from_secs(1), None);
+            let local_cpu = crate::cpu::get();
+            let remote_cpu = state.remote_cpu.load(Ordering::Relaxed);
+            bandwidth::print_status_with_cpu(seq, "TX", tx_bytes, Duration::from_secs(1), None, Some(local_cpu), Some(remote_cpu));
         }
         if cmd.server_rx() {
-            bandwidth::print_status(seq, "RX", rx_bytes, Duration::from_secs(1), Some(lost));
+            let local_cpu = crate::cpu::get();
+            let remote_cpu = state.remote_cpu.load(Ordering::Relaxed);
+            bandwidth::print_status_with_cpu(seq, "RX", rx_bytes, Duration::from_secs(1), Some(lost), Some(local_cpu), Some(remote_cpu));
         }
     }
 }

@@ -137,23 +137,28 @@ impl Command {
 pub struct StatusMessage {
     pub seq: u32,
     pub bytes_received: u32,
+    pub cpu_load: u8,
 }
 
 impl StatusMessage {
     pub fn serialize(&self) -> [u8; STATUS_MSG_SIZE] {
         let mut buf = [0u8; STATUS_MSG_SIZE];
         buf[0] = STATUS_MSG_TYPE;
-        buf[1..5].copy_from_slice(&self.seq.to_be_bytes());
-        buf[5] = 0;
-        buf[6] = 0;
-        buf[7] = 0;
+        // Byte 1: CPU load percentage (0-100)
+        buf[1] = self.cpu_load;
+        buf[2] = 0;
+        buf[3] = 0;
+        // Bytes 4-7: sequence number (LE)
+        buf[4..8].copy_from_slice(&self.seq.to_le_bytes());
+        // Bytes 8-11: bytes received (LE)
         buf[8..12].copy_from_slice(&self.bytes_received.to_le_bytes());
         buf
     }
 
     pub fn deserialize(buf: &[u8; STATUS_MSG_SIZE]) -> Self {
         Self {
-            seq: u32::from_be_bytes([buf[1], buf[2], buf[3], buf[4]]),
+            cpu_load: buf[1],
+            seq: u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]),
             bytes_received: u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]),
         }
     }

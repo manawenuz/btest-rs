@@ -382,11 +382,13 @@ async fn client_status_loop(cmd: &Command, state: &BandwidthState) {
         let rx = if cmd.client_rx() { state.rx_bytes.swap(0, Ordering::Relaxed) } else { 0 };
         state.record_interval(tx, rx, 0);
 
+        let local_cpu = crate::cpu::get();
+        let remote_cpu = state.remote_cpu.load(Ordering::Relaxed);
         if cmd.client_tx() {
-            bandwidth::print_status(seq, "TX", tx, Duration::from_secs(1), None);
+            bandwidth::print_status_with_cpu(seq, "TX", tx, Duration::from_secs(1), None, Some(local_cpu), Some(remote_cpu));
         }
         if cmd.client_rx() {
-            bandwidth::print_status(seq, "RX", rx, Duration::from_secs(1), None);
+            bandwidth::print_status_with_cpu(seq, "RX", rx, Duration::from_secs(1), None, Some(local_cpu), Some(remote_cpu));
         }
     }
 }
@@ -420,6 +422,7 @@ async fn udp_client_status_loop(
         match tokio::time::timeout(wait_time, reader.read_exact(&mut status_buf)).await {
             Ok(Ok(_)) => {
                 let server_status = StatusMessage::deserialize(&status_buf);
+                state.remote_cpu.store(server_status.cpu_load, Ordering::Relaxed);
 
                 if server_status.bytes_received > 0 && cmd.client_tx() {
                     let new_speed =
@@ -453,7 +456,7 @@ async fn udp_client_status_loop(
         let lost = state.rx_lost_packets.swap(0, Ordering::Relaxed);
         state.record_interval(tx_bytes, rx_bytes, lost);
 
-        let status = StatusMessage {
+        let status = StatusMessage { cpu_load: crate::cpu::get(),
             seq,
             bytes_received: rx_bytes as u32,
         };
@@ -463,11 +466,13 @@ async fn udp_client_status_loop(
         }
         let _ = writer.flush().await;
 
+        let local_cpu = crate::cpu::get();
+        let remote_cpu = state.remote_cpu.load(Ordering::Relaxed);
         if cmd.client_tx() {
-            bandwidth::print_status(seq, "TX", tx_bytes, Duration::from_secs(1), None);
+            bandwidth::print_status_with_cpu(seq, "TX", tx_bytes, Duration::from_secs(1), None, Some(local_cpu), Some(remote_cpu));
         }
         if cmd.client_rx() {
-            bandwidth::print_status(seq, "RX", rx_bytes, Duration::from_secs(1), Some(lost));
+            bandwidth::print_status_with_cpu(seq, "RX", rx_bytes, Duration::from_secs(1), Some(lost), Some(local_cpu), Some(remote_cpu));
         }
     }
 }

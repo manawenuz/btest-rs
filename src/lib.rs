@@ -1,7 +1,8 @@
 pub mod auth;
-pub mod csv_output;
 pub mod bandwidth;
 pub mod client;
+pub mod cpu;
+pub mod csv_output;
 pub mod ecsrp5;
 pub mod protocol;
 pub mod server;

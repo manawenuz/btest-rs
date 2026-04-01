@@ -1,6 +1,7 @@
 mod auth;
 mod bandwidth;
 mod client;
+mod cpu;
 pub mod csv_output;
 mod ecsrp5;
 mod protocol;
@@ -99,6 +100,9 @@ struct Cli {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+
+    // Start CPU usage sampler
+    cpu::start_sampler();
 
     // Set up logging based on verbosity
     let filter = match cli.verbose {

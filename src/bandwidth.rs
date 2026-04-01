@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -18,6 +18,8 @@ pub struct BandwidthState {
     pub total_rx_bytes: AtomicU64,
     pub total_lost_packets: AtomicU64,
     pub intervals: AtomicU32,
+    /// Remote peer's CPU usage (received via status messages)
+    pub remote_cpu: AtomicU8,
 }
 
 impl BandwidthState {
@@ -35,6 +37,7 @@ impl BandwidthState {
             total_rx_bytes: AtomicU64::new(0),
             total_lost_packets: AtomicU64::new(0),
             intervals: AtomicU32::new(0),
+            remote_cpu: AtomicU8::new(0),
         })
     }
 
@@ -123,6 +126,18 @@ pub fn print_status(
     elapsed: Duration,
     lost_packets: Option<u64>,
 ) {
+    print_status_with_cpu(interval_num, direction, bytes, elapsed, lost_packets, None, None);
+}
+
+pub fn print_status_with_cpu(
+    interval_num: u32,
+    direction: &str,
+    bytes: u64,
+    elapsed: Duration,
+    lost_packets: Option<u64>,
+    local_cpu: Option<u8>,
+    remote_cpu: Option<u8>,
+) {
     if crate::csv_output::is_quiet() {
         return;
     }
@@ -136,13 +151,26 @@ pub fn print_status(
         _ => String::new(),
     };
 
+    let cpu_str = match (local_cpu, remote_cpu) {
+        (Some(l), Some(r)) => {
+            let warn = if l > 70 || r > 70 { " !" } else { "" };
+            format!("  cpu: {}%/{}%{}", l, r, warn)
+        }
+        (Some(l), None) => {
+            let warn = if l > 70 { " !" } else { "" };
+            format!("  cpu: {}%{}", l, warn)
+        }
+        _ => String::new(),
+    };
+
     println!(
-        "[{:4}] {:>3}  {} ({} bytes){}",
+        "[{:4}] {:>3}  {} ({} bytes){}{}",
         interval_num,
         direction,
         format_bandwidth(bw),
         bytes,
         loss_str,
+        cpu_str,
     );
 }
 
