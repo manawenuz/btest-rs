@@ -346,13 +346,20 @@ async fn handle_client(
         run_tcp_test_server(stream, cmd).await
     };
 
-    crate::syslog_logger::test_end(&peer.to_string(), proto_str, dir_str);
-    result
+    let (total_tx, total_rx, total_lost, intervals) = match &result {
+        Ok(summary) => *summary,
+        Err(_) => (0, 0, 0, 0),
+    };
+    crate::syslog_logger::test_end(
+        &peer.to_string(), proto_str, dir_str,
+        total_tx, total_rx, total_lost, intervals,
+    );
+    result.map(|_| ())
 }
 
 // --- TCP Test Server ---
 
-async fn run_tcp_test_server(stream: TcpStream, cmd: Command) -> Result<()> {
+async fn run_tcp_test_server(stream: TcpStream, cmd: Command) -> Result<(u64, u64, u64, u32)> {
     let state = BandwidthState::new();
     let tx_size = cmd.tx_size as usize;
     let server_should_tx = cmd.server_tx();
@@ -420,11 +427,11 @@ async fn run_tcp_test_server(stream: TcpStream, cmd: Command) -> Result<()> {
     state.running.store(false, Ordering::SeqCst);
     if let Some(h) = tx_handle { let _ = h.await; }
     if let Some(h) = rx_handle { let _ = h.await; }
-    Ok(())
+    Ok(state.summary())
 }
 
 /// TCP multi-connection.
-async fn run_tcp_multiconn_server(streams: Vec<TcpStream>, cmd: Command) -> Result<()> {
+async fn run_tcp_multiconn_server(streams: Vec<TcpStream>, cmd: Command) -> Result<(u64, u64, u64, u32)> {
     let state = BandwidthState::new();
     let tx_size = cmd.tx_size as usize;
     let server_should_tx = cmd.server_tx();
@@ -480,7 +487,7 @@ async fn run_tcp_multiconn_server(streams: Vec<TcpStream>, cmd: Command) -> Resu
     for h in tx_handles { let _ = h.await; }
     for h in rx_handles { let _ = h.await; }
     tracing::info!("TCP multi-connection test ended");
-    Ok(())
+    Ok(state.summary())
 }
 
 async fn tcp_tx_loop(
@@ -531,6 +538,7 @@ async fn tcp_tx_loop_inner(
                 state.running.store(false, Ordering::SeqCst);
                 break;
             }
+            state.record_interval(0, rx_bytes, 0);
             bandwidth::print_status(status_seq, "RX", rx_bytes, Duration::from_secs(1), None);
             next_status = Instant::now() + Duration::from_secs(1);
         }
@@ -612,7 +620,7 @@ async fn tcp_status_sender(
         }
         let _ = writer.flush().await;
 
-        // Also print locally
+        state.record_interval(0, rx_bytes, 0);
         bandwidth::print_status(seq, "RX", rx_bytes, Duration::from_secs(1), None);
     }
 }
@@ -624,7 +632,7 @@ async fn run_udp_test_server(
     peer: SocketAddr,
     cmd: &Command,
     udp_port_offset: Arc<std::sync::atomic::AtomicU16>,
-) -> Result<()> {
+) -> Result<(u64, u64, u64, u32)> {
     let offset = udp_port_offset.fetch_add(1, Ordering::SeqCst);
     let server_udp_port = BTEST_UDP_PORT_START + offset;
     let client_udp_port = server_udp_port + BTEST_PORT_CLIENT_OFFSET;
@@ -729,7 +737,7 @@ async fn run_udp_test_server(
     state.running.store(false, Ordering::SeqCst);
     if let Some(h) = tx_handle { let _ = h.await; }
     if let Some(h) = rx_handle { let _ = h.await; }
-    Ok(())
+    Ok(state.summary())
 }
 
 async fn udp_tx_loop(
@@ -863,14 +871,15 @@ async fn status_report_loop(cmd: &Command, state: &BandwidthState) {
 
         seq += 1;
 
+        let tx = if cmd.server_tx() { state.tx_bytes.swap(0, Ordering::Relaxed) } else { 0 };
+        let rx = if cmd.server_rx() { state.rx_bytes.swap(0, Ordering::Relaxed) } else { 0 };
+        let lost = if cmd.server_rx() { state.rx_lost_packets.swap(0, Ordering::Relaxed) } else { 0 };
+        state.record_interval(tx, rx, lost);
+
         if cmd.server_tx() {
-            let tx = state.tx_bytes.swap(0, Ordering::Relaxed);
             bandwidth::print_status(seq, "TX", tx, Duration::from_secs(1), None);
         }
-
         if cmd.server_rx() {
-            let rx = state.rx_bytes.swap(0, Ordering::Relaxed);
-            let lost = state.rx_lost_packets.swap(0, Ordering::Relaxed);
             let lost_opt = if cmd.is_udp() { Some(lost) } else { None };
             bandwidth::print_status(seq, "RX", rx, Duration::from_secs(1), lost_opt);
         }
@@ -972,7 +981,8 @@ async fn udp_status_loop(
         }
         let _ = writer.flush().await;
 
-        // Print local stats
+        // Print local stats and record totals
+        state.record_interval(tx_bytes, rx_bytes, lost);
         if cmd.server_tx() {
             bandwidth::print_status(seq, "TX", tx_bytes, Duration::from_secs(1), None);
         }

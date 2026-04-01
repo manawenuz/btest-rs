@@ -13,6 +13,11 @@ pub struct BandwidthState {
     pub rx_packets: AtomicU64,
     pub rx_lost_packets: AtomicU64,
     pub last_udp_seq: AtomicU32,
+    /// Cumulative totals (never reset by swap)
+    pub total_tx_bytes: AtomicU64,
+    pub total_rx_bytes: AtomicU64,
+    pub total_lost_packets: AtomicU64,
+    pub intervals: AtomicU32,
 }
 
 impl BandwidthState {
@@ -26,7 +31,31 @@ impl BandwidthState {
             rx_packets: AtomicU64::new(0),
             rx_lost_packets: AtomicU64::new(0),
             last_udp_seq: AtomicU32::new(0),
+            total_tx_bytes: AtomicU64::new(0),
+            total_rx_bytes: AtomicU64::new(0),
+            total_lost_packets: AtomicU64::new(0),
+            intervals: AtomicU32::new(0),
         })
+    }
+
+    /// Record an interval's stats into cumulative totals.
+    pub fn record_interval(&self, tx: u64, rx: u64, lost: u64) {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.total_tx_bytes.fetch_add(tx, Relaxed);
+        self.total_rx_bytes.fetch_add(rx, Relaxed);
+        self.total_lost_packets.fetch_add(lost, Relaxed);
+        self.intervals.fetch_add(1, Relaxed);
+    }
+
+    /// Get summary for syslog reporting.
+    pub fn summary(&self) -> (u64, u64, u64, u32) {
+        use std::sync::atomic::Ordering::Relaxed;
+        (
+            self.total_tx_bytes.load(Relaxed),
+            self.total_rx_bytes.load(Relaxed),
+            self.total_lost_packets.load(Relaxed),
+            self.intervals.load(Relaxed),
+        )
     }
 }
 

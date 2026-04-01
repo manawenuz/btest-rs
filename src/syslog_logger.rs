@@ -121,24 +121,28 @@ pub fn test_start(peer: &str, proto: &str, direction: &str, conn_count: u8) {
     send(6, &msg);
 }
 
-pub fn test_end(peer: &str, proto: &str, direction: &str) {
-    let msg = format!(
-        "TEST_END peer={} proto={} dir={}",
-        peer, proto, direction,
-    );
-    tracing::info!("{}", msg);
-    send(6, &msg);
-}
-
-pub fn test_result(
+pub fn test_end(
     peer: &str,
+    proto: &str,
     direction: &str,
-    avg_mbps: f64,
+    total_tx: u64,
+    total_rx: u64,
+    total_lost: u64,
     duration_secs: u32,
 ) {
+    let tx_mbps = if duration_secs > 0 {
+        total_tx as f64 * 8.0 / duration_secs as f64 / 1_000_000.0
+    } else {
+        0.0
+    };
+    let rx_mbps = if duration_secs > 0 {
+        total_rx as f64 * 8.0 / duration_secs as f64 / 1_000_000.0
+    } else {
+        0.0
+    };
     let msg = format!(
-        "TEST_RESULT peer={} dir={} avg_mbps={:.2} duration={}s",
-        peer, direction, avg_mbps, duration_secs,
+        "TEST_END peer={} proto={} dir={} duration={}s tx_avg={:.2}Mbps rx_avg={:.2}Mbps tx_bytes={} rx_bytes={} lost={}",
+        peer, proto, direction, duration_secs, tx_mbps, rx_mbps, total_tx, total_rx, total_lost,
     );
     tracing::info!("{}", msg);
     send(6, &msg);
