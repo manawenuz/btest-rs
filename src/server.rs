@@ -366,8 +366,22 @@ async fn handle_client(
 
 // --- TCP Test Server ---
 
+/// Run a TCP bandwidth test on an already-authenticated stream.
+/// Public API for use by server_pro.
+pub async fn run_tcp_test(
+    stream: TcpStream,
+    cmd: Command,
+    state: Arc<BandwidthState>,
+) -> Result<(u64, u64, u64, u32)> {
+    run_tcp_test_inner(stream, cmd, state).await
+}
+
 async fn run_tcp_test_server(stream: TcpStream, cmd: Command) -> Result<(u64, u64, u64, u32)> {
     let state = BandwidthState::new();
+    run_tcp_test_inner(stream, cmd, state).await
+}
+
+async fn run_tcp_test_inner(stream: TcpStream, cmd: Command, state: Arc<BandwidthState>) -> Result<(u64, u64, u64, u32)> {
     let tx_size = cmd.tx_size as usize;
     let server_should_tx = cmd.server_tx();
     let server_should_rx = cmd.server_rx();
@@ -633,6 +647,18 @@ async fn tcp_status_sender(
 
 // --- UDP Test Server ---
 
+/// Run a UDP bandwidth test on an already-authenticated stream.
+/// Public API for use by server_pro. Caller provides the UDP port offset.
+pub async fn run_udp_test(
+    stream: &mut TcpStream,
+    peer: SocketAddr,
+    cmd: &Command,
+    state: Arc<BandwidthState>,
+    udp_port_start: u16,
+) -> Result<(u64, u64, u64, u32)> {
+    run_udp_test_inner(stream, peer, cmd, state, udp_port_start).await
+}
+
 async fn run_udp_test_server(
     stream: &mut TcpStream,
     peer: SocketAddr,
@@ -640,7 +666,17 @@ async fn run_udp_test_server(
     udp_port_offset: Arc<std::sync::atomic::AtomicU16>,
 ) -> Result<(u64, u64, u64, u32)> {
     let offset = udp_port_offset.fetch_add(1, Ordering::SeqCst);
-    let server_udp_port = BTEST_UDP_PORT_START + offset;
+    let state = BandwidthState::new();
+    run_udp_test_inner(stream, peer, cmd, state, BTEST_UDP_PORT_START + offset).await
+}
+
+async fn run_udp_test_inner(
+    stream: &mut TcpStream,
+    peer: SocketAddr,
+    cmd: &Command,
+    state: Arc<BandwidthState>,
+    server_udp_port: u16,
+) -> Result<(u64, u64, u64, u32)> {
     let client_udp_port = server_udp_port + BTEST_PORT_CLIENT_OFFSET;
 
     stream.write_all(&server_udp_port.to_be_bytes()).await?;
@@ -707,7 +743,6 @@ async fn run_udp_test_server(
         if use_unconnected { "unconnected" } else { "connected" },
     );
 
-    let state = BandwidthState::new();
     let tx_size = cmd.tx_size as usize;
     let server_should_tx = cmd.server_tx();
     let server_should_rx = cmd.server_rx();

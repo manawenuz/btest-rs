@@ -232,24 +232,49 @@ async fn handle_pro_client(
         quota_mgr.max_duration(),
     );
 
+    // Spawn quota enforcer — runs alongside the test
+    let enforcer_state = state.clone();
     let enforcer_handle = tokio::spawn(async move {
         enforcer.run().await
     });
 
-    // Run the actual bandwidth test using the standard server
-    // For now, delegate to the standard TCP/UDP handlers
-    // by using the existing btest_rs::server internals.
-    // The state's `running` flag will be set to false by the enforcer
-    // when quota is exceeded, which will stop the TX/RX loops.
+    // Run the actual bandwidth test using the standard server handlers.
+    // The enforcer runs concurrently and will set state.running = false
+    // if any quota is exceeded, which gracefully stops the TX/RX loops.
+    static UDP_PORT_OFFSET: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
 
-    // TODO: Integrate more deeply with btest_rs::server to pass the shared state
-    // For now, we simulate by waiting for the enforcer to finish
+    let test_result = if cmd.is_udp() {
+        let offset = UDP_PORT_OFFSET.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let udp_port = btest_rs::protocol::BTEST_UDP_PORT_START + offset;
+        btest_rs::server::run_udp_test(
+            &mut stream, peer, &cmd, state.clone(), udp_port,
+        ).await
+    } else {
+        btest_rs::server::run_tcp_test(stream, cmd.clone(), state.clone()).await
+    };
+
+    // Test finished — stop the enforcer if still running
+    enforcer_state.running.store(false, std::sync::atomic::Ordering::SeqCst);
     let stop_reason = enforcer_handle.await.unwrap_or(StopReason::ClientDisconnected);
+
+    // Determine final stop reason
+    let final_reason = match &test_result {
+        Ok(_) => {
+            if stop_reason == StopReason::ClientDisconnected {
+                StopReason::ClientDisconnected
+            } else {
+                stop_reason // quota or duration exceeded
+            }
+        }
+        Err(_) => StopReason::ClientDisconnected,
+    };
 
     // Record final usage
     let (total_tx, total_rx, _, _) = state.summary();
+
+    // Flush to DB
     quota_mgr.record_usage(&username, &peer.ip().to_string(), total_tx, total_rx);
     db.end_session(session_id, total_tx, total_rx)?;
 
-    Ok((username, stop_reason, total_tx, total_rx))
+    Ok((username, final_reason, total_tx, total_rx))
 }
