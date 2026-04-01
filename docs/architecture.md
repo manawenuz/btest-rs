@@ -219,6 +219,14 @@ IPv6 requires special handling on macOS:
 - NDP probe packet sent before data blast to populate neighbor cache
 - Adaptive backoff on ENOBUFS (200μs→10ms, resets on success)
 
+### 11. CPU usage monitoring
+
+A background OS thread samples system CPU every 1 second via:
+- **macOS:** `host_statistics(HOST_CPU_LOAD_INFO)` — returns user/system/idle/nice ticks
+- **Linux:** `/proc/stat` — reads aggregate CPU line
+
+The percentage is stored in a global `AtomicU8` and included in every status message at byte 1 using MikroTik's encoding: `0x80 | percentage`. On receive, the remote CPU is decoded with `byte & 0x7F` and capped at 100%. Both local and remote CPU are displayed per interval and logged to CSV/syslog.
+
 ## File Layout
 
 ```
@@ -232,6 +240,7 @@ btest-rs/
 │   ├── server.rs            # Server mode: listener, TCP/UDP handlers
 │   ├── client.rs            # Client mode: connector, TCP/UDP handlers
 │   ├── bandwidth.rs         # Rate limiting, formatting, shared state
+│   ├── cpu.rs               # CPU usage sampler (macOS + Linux)
 │   ├── csv_output.rs        # CSV result logging (append-mode, auto-header)
 │   └── syslog_logger.rs     # Remote syslog sender (RFC 3164 / BSD format)
 ├── tests/

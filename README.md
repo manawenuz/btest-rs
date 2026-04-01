@@ -11,6 +11,7 @@ A Rust reimplementation of the [MikroTik Bandwidth Test (btest)](https://wiki.mi
 - **Bidirectional testing** -- simultaneous upload and download
 - **Syslog logging** -- send structured events (auth, test start/end) to a remote syslog server
 - **CSV output** -- append machine-readable test results to a CSV file
+- **CPU usage monitoring** -- local and remote CPU shown per interval, warning at >70%
 - **Timed tests** -- `--duration` flag to automatically stop after N seconds
 - **Quiet mode** -- suppress terminal output for scripted/automated use
 - **NAT traversal** -- probe packet to open firewall holes for UDP receive

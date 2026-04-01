@@ -1,6 +1,6 @@
 [package]
 name = "btest-rs"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 description = "MikroTik Bandwidth Test (btest) server and client with EC-SRP5 auth — a Rust reimplementation"
 license = "MIT AND Apache-2.0"

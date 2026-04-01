@@ -235,10 +235,11 @@ btest -c 192.168.88.1 -r -P 3000
 ## Reading the Output
 
 ```
-[   1]  TX  264.50 Mbps (33062912 bytes)
-[   2]  TX  263.98 Mbps (32997376 bytes)
-[   2]  RX  263.98 Mbps (32997012 bytes)
-[   3]  RX  430.51 Mbps (53813376 bytes)  lost: 5
+[   1]  TX  264.50 Mbps (33062912 bytes)  cpu: 12%/0%
+[   2]  TX  263.98 Mbps (32997376 bytes)  cpu: 15%/33%
+[   2]  RX  263.98 Mbps (32997012 bytes)  cpu: 15%/33%
+[   3]  RX  430.51 Mbps (53813376 bytes)  lost: 5  cpu: 18%/45%
+[   4]  RX  450.00 Mbps (56250000 bytes)  cpu: 72%/85% !
 ```
 
 | Field | Meaning |
@@ -249,6 +250,8 @@ btest -c 192.168.88.1 -r -P 3000
 | `Mbps` | Megabits per second |
 | `bytes` | Raw bytes transferred in this interval |
 | `lost: N` | UDP packets lost in this interval (UDP mode only) |
+| `cpu: L%/R%` | Local CPU / Remote CPU usage percentage |
+| `!` | Warning: CPU usage exceeds 70% on either side |
 
 ## Complete CLI Reference
 
