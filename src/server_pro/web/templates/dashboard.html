@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard &mdash; {{ ip }} &mdash; btest-rs</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: #0f1117;
+    color: #e1e4e8;
+    min-height: 100vh;
+    padding: 1.5rem;
+  }
+  a { color: #58a6ff; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+    flex-wrap: wrap;
+  }
+  .header h1 { font-size: 1.5rem; color: #58a6ff; }
+  .header .ip-label {
+    font-size: 1.1rem;
+    color: #8b949e;
+    font-family: monospace;
+  }
+  .header .home-link { margin-left: auto; }
+
+  /* Stats cards */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+  .stat-card {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 1rem;
+  }
+  .stat-card .label {
+    color: #8b949e;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .stat-card .value {
+    font-size: 1.4rem;
+    font-weight: 600;
+    margin-top: 0.25rem;
+  }
+
+  /* Table */
+  .table-wrap {
+    overflow-x: auto;
+    margin-bottom: 1.5rem;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: #161b22;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  th, td {
+    padding: 0.6rem 1rem;
+    text-align: left;
+    border-bottom: 1px solid #21262d;
+    white-space: nowrap;
+  }
+  th {
+    background: #0d1117;
+    color: #8b949e;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  tr { cursor: pointer; }
+  tr:hover td { background: #1c2128; }
+  tr.selected td { background: #1f3a5f; }
+
+  .proto-tcp { color: #3fb950; }
+  .proto-udp { color: #d29922; }
+  .dir-tx { color: #f78166; }
+  .dir-rx { color: #58a6ff; }
+  .dir-both { color: #bc8cff; }
+
+  /* Chart area */
+  .chart-section {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+  }
+  .chart-section h2 {
+    font-size: 1rem;
+    color: #8b949e;
+    margin-bottom: 1rem;
+  }
+  .chart-container {
+    position: relative;
+    width: 100%;
+    max-height: 360px;
+  }
+  .chart-placeholder {
+    text-align: center;
+    color: #484f58;
+    padding: 3rem 0;
+  }
+
+  .footer {
+    text-align: center;
+    color: #484f58;
+    font-size: 0.8rem;
+    margin-top: 2rem;
+  }
+  .no-data {
+    text-align: center;
+    padding: 3rem;
+    color: #484f58;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>btest-rs</h1>
+  <span class="ip-label">{{ ip }}</span>
+  <span class="home-link"><a href="/">Home</a></span>
+</div>
+
+<!-- Stats summary (filled via API) -->
+<div class="stats" id="stats-grid">
+  <div class="stat-card">
+    <div class="label">Total Tests</div>
+    <div class="value" id="stat-total-tests">&mdash;</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Total TX</div>
+    <div class="value" id="stat-total-tx">&mdash;</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Total RX</div>
+    <div class="value" id="stat-total-rx">&mdash;</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Avg TX Mbps</div>
+    <div class="value" id="stat-avg-tx">&mdash;</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Avg RX Mbps</div>
+    <div class="value" id="stat-avg-rx">&mdash;</div>
+  </div>
+</div>
+
+<!-- Chart for selected session -->
+<div class="chart-section">
+  <h2 id="chart-title">Select a test below to view its throughput chart</h2>
+  <div class="chart-container">
+    <canvas id="throughput-chart"></canvas>
+    <div class="chart-placeholder" id="chart-placeholder">Click a row in the table to load the throughput graph for that session.</div>
+  </div>
+</div>
+
+<!-- Sessions table -->
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Date</th>
+        <th>Protocol</th>
+        <th>Direction</th>
+        <th>TX Bytes</th>
+        <th>RX Bytes</th>
+        <th>Duration</th>
+        <th>Avg TX Mbps</th>
+        <th>Avg RX Mbps</th>
+      </tr>
+    </thead>
+    <tbody id="sessions-body">
+      <tr><td colspan="9" class="no-data">Loading sessions...</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="footer">Powered by btest-rs</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+var currentIp = "{{ ip }}";
+var throughputChart = null;
+
+function formatBytes(b) {
+  if (b === 0) return '0 B';
+  var units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  var i = Math.floor(Math.log(b) / Math.log(1024));
+  if (i >= units.length) i = units.length - 1;
+  return (b / Math.pow(1024, i)).toFixed(1) + ' ' + units[i];
+}
+
+function formatMbps(bytesPerSec) {
+  return (bytesPerSec * 8 / 1e6).toFixed(2);
+}
+
+function durationStr(startedAt, endedAt) {
+  if (!startedAt || !endedAt) return '--';
+  var ms = new Date(endedAt) - new Date(startedAt);
+  if (ms < 0) return '--';
+  var s = Math.round(ms / 1000);
+  if (s < 60) return s + 's';
+  return Math.floor(s / 60) + 'm ' + (s % 60) + 's';
+}
+
+function durationSec(startedAt, endedAt) {
+  if (!startedAt || !endedAt) return 0;
+  var ms = new Date(endedAt) - new Date(startedAt);
+  return Math.max(ms / 1000, 0.001);
+}
+
+// Load summary stats
+fetch('/api/ip/' + encodeURIComponent(currentIp) + '/stats')
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    document.getElementById('stat-total-tests').textContent = data.total_sessions || 0;
+    document.getElementById('stat-total-tx').textContent = formatBytes(data.total_tx_bytes || 0);
+    document.getElementById('stat-total-rx').textContent = formatBytes(data.total_rx_bytes || 0);
+    document.getElementById('stat-avg-tx').textContent = data.avg_tx_mbps ? data.avg_tx_mbps.toFixed(2) : '0.00';
+    document.getElementById('stat-avg-rx').textContent = data.avg_rx_mbps ? data.avg_rx_mbps.toFixed(2) : '0.00';
+  })
+  .catch(function() {});
+
+// Load sessions list
+fetch('/api/ip/' + encodeURIComponent(currentIp) + '/sessions')
+  .then(function(r) { return r.json(); })
+  .then(function(sessions) {
+    var tbody = document.getElementById('sessions-body');
+    if (!sessions || sessions.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="9" class="no-data">No test sessions found for this IP.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = '';
+    sessions.forEach(function(s, i) {
+      var tr = document.createElement('tr');
+      tr.dataset.sessionId = s.id;
+      tr.onclick = function() { selectSession(s.id, tr); };
+
+      var dur = durationSec(s.started_at, s.ended_at);
+      var avgTx = dur > 0 ? formatMbps(s.tx_bytes / dur) : '0.00';
+      var avgRx = dur > 0 ? formatMbps(s.rx_bytes / dur) : '0.00';
+      var proto = (s.protocol || 'TCP').toUpperCase();
+      var dir = (s.direction || 'BOTH').toUpperCase();
+      var protoClass = proto === 'UDP' ? 'proto-udp' : 'proto-tcp';
+      var dirClass = dir === 'TX' ? 'dir-tx' : dir === 'RX' ? 'dir-rx' : 'dir-both';
+
+      tr.innerHTML =
+        '<td>' + (i + 1) + '</td>' +
+        '<td>' + (s.started_at || '--') + '</td>' +
+        '<td class="' + protoClass + '">' + proto + '</td>' +
+        '<td class="' + dirClass + '">' + dir + '</td>' +
+        '<td>' + formatBytes(s.tx_bytes || 0) + '</td>' +
+        '<td>' + formatBytes(s.rx_bytes || 0) + '</td>' +
+        '<td>' + durationStr(s.started_at, s.ended_at) + '</td>' +
+        '<td>' + avgTx + '</td>' +
+        '<td>' + avgRx + '</td>';
+      tbody.appendChild(tr);
+    });
+
+    // Auto-select the first (most recent) session
+    if (sessions.length > 0) {
+      var firstRow = tbody.querySelector('tr');
+      if (firstRow) selectSession(sessions[0].id, firstRow);
+    }
+  })
+  .catch(function() {
+    document.getElementById('sessions-body').innerHTML =
+      '<tr><td colspan="9" class="no-data">Failed to load sessions.</td></tr>';
+  });
+
+function selectSession(sessionId, rowEl) {
+  // Highlight selected row
+  var rows = document.querySelectorAll('#sessions-body tr');
+  rows.forEach(function(r) { r.classList.remove('selected'); });
+  rowEl.classList.add('selected');
+
+  document.getElementById('chart-title').textContent = 'Throughput for session #' + sessionId;
+  document.getElementById('chart-placeholder').style.display = 'none';
+
+  fetch('/api/session/' + sessionId + '/intervals')
+    .then(function(r) { return r.json(); })
+    .then(function(intervals) {
+      renderChart(intervals);
+    })
+    .catch(function() {
+      document.getElementById('chart-placeholder').style.display = 'block';
+      document.getElementById('chart-placeholder').textContent = 'Failed to load interval data.';
+    });
+}
+
+function renderChart(intervals) {
+  var canvas = document.getElementById('throughput-chart');
+  if (throughputChart) {
+    throughputChart.destroy();
+  }
+
+  if (!intervals || intervals.length === 0) {
+    document.getElementById('chart-placeholder').style.display = 'block';
+    document.getElementById('chart-placeholder').textContent = 'No interval data available for this session.';
+    return;
+  }
+
+  var labels = intervals.map(function(d) { return d.second + 's'; });
+  var txData = intervals.map(function(d) { return (d.tx_bytes * 8 / 1e6).toFixed(2); });
+  var rxData = intervals.map(function(d) { return (d.rx_bytes * 8 / 1e6).toFixed(2); });
+
+  throughputChart = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels: labels,
+      datasets: [
+        {
+          label: 'TX Mbps',
+          data: txData,
+          borderColor: '#f78166',
+          backgroundColor: 'rgba(247, 129, 102, 0.1)',
+          borderWidth: 2,
+          fill: true,
+          tension: 0.3,
+          pointRadius: 1
+        },
+        {
+          label: 'RX Mbps',
+          data: rxData,
+          borderColor: '#58a6ff',
+          backgroundColor: 'rgba(88, 166, 255, 0.1)',
+          borderWidth: 2,
+          fill: true,
+          tension: 0.3,
+          pointRadius: 1
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: {
+        intersect: false,
+        mode: 'index'
+      },
+      scales: {
+        x: {
+          title: { display: true, text: 'Time', color: '#8b949e' },
+          ticks: { color: '#8b949e' },
+          grid: { color: '#21262d' }
+        },
+        y: {
+          title: { display: true, text: 'Mbps', color: '#8b949e' },
+          ticks: { color: '#8b949e' },
+          grid: { color: '#21262d' },
+          beginAtZero: true
+        }
+      },
+      plugins: {
+        legend: {
+          labels: { color: '#e1e4e8' }
+        },
+        tooltip: {
+          backgroundColor: '#161b22',
+          borderColor: '#30363d',
+          borderWidth: 1,
+          titleColor: '#e1e4e8',
+          bodyColor: '#8b949e'
+        }
+      }
+    }
+  });
+}
+</script>
+</body>
+</html>
