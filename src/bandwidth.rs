@@ -80,6 +80,34 @@ pub fn calc_send_interval(tx_speed_bps: u32, tx_size: u16) -> Option<Duration> {
     }
 }
 
+/// Advance `next_send` by one interval and clamp drift.
+///
+/// When the sender falls behind (e.g., the write blocked longer than the
+/// inter-packet interval), `next_send` accumulates a debt.  Once the path
+/// clears, the loop would fire packets with *no* delay until the debt is
+/// repaid, producing a burst that overshoots the target rate.
+///
+/// This helper resets `next_send` to `now` whenever it has drifted more
+/// than 2x the interval behind the current wall-clock time, bounding the
+/// maximum burst to at most one extra interval's worth of packets.
+pub fn advance_next_send(
+    next_send: &mut std::time::Instant,
+    iv: Duration,
+    now: std::time::Instant,
+) -> Option<Duration> {
+    *next_send += iv;
+    // If we have fallen more than 2x the interval behind, reset to now
+    // to prevent a compensating burst.
+    if *next_send + iv < now {
+        *next_send = now;
+    }
+    if *next_send > now {
+        Some(*next_send - now)
+    } else {
+        None
+    }
+}
+
 /// Format a bandwidth value in human-readable form.
 pub fn format_bandwidth(bits_per_sec: f64) -> String {
     if bits_per_sec >= 1_000_000_000.0 {

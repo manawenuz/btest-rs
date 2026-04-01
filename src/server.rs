@@ -565,10 +565,9 @@ async fn tcp_tx_loop_inner(
 
         match interval {
             Some(iv) => {
-                next_send += iv;
                 let now = Instant::now();
-                if next_send > now {
-                    tokio::time::sleep(next_send - now).await;
+                if let Some(delay) = bandwidth::advance_next_send(&mut next_send, iv, now) {
+                    tokio::time::sleep(delay).await;
                 }
             }
             None => {
@@ -805,10 +804,9 @@ async fn udp_tx_loop(
 
         match interval {
             Some(iv) => {
-                next_send += iv;
                 let now = Instant::now();
-                if next_send > now {
-                    tokio::time::sleep(next_send - now).await;
+                if let Some(delay) = bandwidth::advance_next_send(&mut next_send, iv, now) {
+                    tokio::time::sleep(delay).await;
                 }
             }
             None => {

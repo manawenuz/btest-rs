@@ -1,0 +1,37 @@
+#!/sbin/openrc-run
+# OpenRC init script for btest-rs
+# MikroTik Bandwidth Test server
+
+name="btest"
+description="MikroTik Bandwidth Test Server (btest-rs)"
+command="/usr/bin/btest"
+command_args="-s"
+command_background=true
+pidfile="/run/$name.pid"
+
+# Run as dedicated user if it exists, otherwise root
+command_user="btest:btest"
+
+# Logging
+output_log="/var/log/$name/$name.log"
+error_log="/var/log/$name/$name.err"
+
+depend() {
+	need net
+	after firewall
+	use dns logger
+}
+
+start_pre() {
+	# Create log directory
+	checkpath -d -m 0755 -o "$command_user" /var/log/$name
+
+	# Create runtime directory
+	checkpath -d -m 0755 -o "$command_user" /run
+}
+
+stop() {
+	ebegin "Stopping $name"
+	start-stop-daemon --stop --pidfile "$pidfile" --retry TERM/5/KILL/3
+	eend $?
+}

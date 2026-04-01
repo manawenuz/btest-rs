@@ -1,7 +1,7 @@
 //! Lightweight CPU usage measurement.
 //!
 //! Returns the system-wide CPU usage as a percentage (0-100).
-//! Works on macOS and Linux without external dependencies.
+//! Works on macOS, Linux, Windows, and FreeBSD without external dependencies.
 
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
@@ -93,7 +93,82 @@ fn get_cpu_times() -> (u64, u64) {
     (0, 0)
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(target_os = "windows")]
+fn get_cpu_times() -> (u64, u64) {
+    #[repr(C)]
+    #[derive(Default)]
+    struct FILETIME {
+        dwLowDateTime: u32,
+        dwHighDateTime: u32,
+    }
+
+    impl FILETIME {
+        fn to_u64(&self) -> u64 {
+            (self.dwHighDateTime as u64) << 32 | self.dwLowDateTime as u64
+        }
+    }
+
+    extern "system" {
+        fn GetSystemTimes(
+            lpIdleTime: *mut FILETIME,
+            lpKernelTime: *mut FILETIME,
+            lpUserTime: *mut FILETIME,
+        ) -> i32;
+    }
+
+    let mut idle = FILETIME::default();
+    let mut kernel = FILETIME::default();
+    let mut user = FILETIME::default();
+
+    // SAFETY: We pass valid pointers to stack-allocated FILETIME structs.
+    // GetSystemTimes is a well-documented Win32 API that writes into these
+    // output parameters. A non-zero return value indicates success.
+    let ret = unsafe { GetSystemTimes(&mut idle, &mut kernel, &mut user) };
+
+    if ret != 0 {
+        let idle_ticks = idle.to_u64();
+        // Kernel time includes idle time on Windows, so total = kernel + user.
+        let total_ticks = kernel.to_u64() + user.to_u64();
+        (total_ticks, idle_ticks)
+    } else {
+        (0, 0)
+    }
+}
+
+#[cfg(target_os = "freebsd")]
+fn get_cpu_times() -> (u64, u64) {
+    // kern.cp_time returns: user nice system interrupt idle
+    if let Ok(output) = std::process::Command::new("sysctl")
+        .arg("-n")
+        .arg("kern.cp_time")
+        .output()
+    {
+        if output.status.success() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            let parts: Vec<u64> = text
+                .split_whitespace()
+                .filter_map(|s| s.parse().ok())
+                .collect();
+            if parts.len() >= 5 {
+                let user = parts[0];
+                let nice = parts[1];
+                let system = parts[2];
+                let interrupt = parts[3];
+                let idle = parts[4];
+                let total = user + nice + system + interrupt + idle;
+                return (total, idle);
+            }
+        }
+    }
+    (0, 0)
+}
+
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows",
+    target_os = "freebsd",
+)))]
 fn get_cpu_times() -> (u64, u64) {
     (0, 0) // Unsupported platform
 }
@@ -116,7 +191,12 @@ mod tests {
     fn test_cpu_times_returns_nonzero() {
         let (total, idle) = get_cpu_times();
         // On supported platforms, total should be > 0
-        if cfg!(any(target_os = "linux", target_os = "macos")) {
+        if cfg!(any(
+            target_os = "linux",
+            target_os = "macos",
+            target_os = "windows",
+            target_os = "freebsd",
+        )) {
             assert!(total > 0, "CPU total ticks should be > 0");
             assert!(idle <= total, "idle should be <= total");
         }

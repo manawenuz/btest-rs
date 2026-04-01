@@ -1,0 +1,52 @@
+# Maintainer: Siavash Sameni <manwe at manko dot yoga>
+pkgname=btest-rs
+pkgver=0.6.0
+pkgrel=0
+pkgdesc="MikroTik Bandwidth Test server and client with EC-SRP5 auth"
+url="https://github.com/manawenuz/btest-rs"
+license="MIT AND Apache-2.0"
+arch="x86_64 aarch64 armv7"
+makedepends="cargo rust"
+install="$pkgname.pre-install"
+source="$pkgname-$pkgver.tar.gz::https://github.com/manawenuz/btest-rs/archive/refs/tags/v$pkgver.tar.gz
+	btest.initd
+	"
+sha256sums="SKIP
+	SKIP
+	"
+
+prepare() {
+	default_prepare
+	cd "$builddir"
+	cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+	cd "$builddir"
+	export CARGO_TARGET_DIR=target
+	cargo build --frozen --release
+}
+
+check() {
+	cd "$builddir"
+	cargo test --frozen --release
+}
+
+package() {
+	cd "$builddir"
+
+	# binary
+	install -Dm755 "target/release/btest" "$pkgdir/usr/bin/btest"
+
+	# man page
+	install -Dm644 "docs/man/btest.1" "$pkgdir/usr/share/man/man1/btest.1"
+
+	# license
+	install -Dm644 "LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+
+	# documentation
+	install -Dm644 "README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
+
+	# OpenRC init script
+	install -Dm755 "$srcdir/btest.initd" "$pkgdir/etc/init.d/btest"
+}
