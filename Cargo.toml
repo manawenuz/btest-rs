@@ -16,6 +16,15 @@ path = "src/lib.rs"
 name = "btest"
 path = "src/main.rs"
 
+[[bin]]
+name = "btest-server-pro"
+path = "src/server_pro/main.rs"
+required-features = ["pro"]
+
+[features]
+default = []
+pro = ["dep:rusqlite", "dep:ldap3"]
+
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive"] }
@@ -32,6 +41,8 @@ num-traits = "0.2.19"
 num-integer = "0.1.46"
 sha2 = "0.11.0"
 hostname = "0.4.2"
+rusqlite = { version = "0.39.0", features = ["bundled"], optional = true }
+ldap3 = { version = "0.12.1", optional = true }
 
 [profile.release]
 opt-level = 3
