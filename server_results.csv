@@ -1,0 +1,5 @@
+timestamp,host,port,protocol,direction,duration_s,tx_avg_mbps,rx_avg_mbps,tx_bytes,rx_bytes,lost_packets,auth_type
+1775024492,172.16.81.1,59260,TCP,BOTH,57,9.97,2.98,71008256,21227792,0,ecsrp5
+1775024501,172.16.81.1,59300,TCP,TX,9,42.41,0.00,47710208,0,0,ecsrp5
+1775024526,172.16.81.1,59340,TCP,RX,442,0.00,2.46,0,136015152,0,ecsrp5
+1775024533,172.16.81.1,59380,UDP,RX,6,0.00,59.49,0,44620736,16013664,ecsrp5
