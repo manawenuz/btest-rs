@@ -354,6 +354,12 @@ async fn handle_client(
         &peer.to_string(), proto_str, dir_str,
         total_tx, total_rx, total_lost, intervals,
     );
+    if crate::csv_output::is_enabled() {
+        crate::csv_output::write_result(
+            &peer.ip().to_string(), peer.port(), proto_str, dir_str,
+            intervals as u64, total_tx, total_rx, total_lost, auth_type,
+        );
+    }
     result.map(|_| ())
 }
 
