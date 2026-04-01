@@ -198,10 +198,16 @@ Both legacy and modern MikroTik authentication schemes are supported:
 
 In server mode, `--ecsrp5` advertises EC-SRP5 to connecting clients. Without it, MD5 is advertised. In client mode, the authentication type is auto-detected from the server's response.
 
-## Known Limitations
+## Known Issues
 
-- **IPv6 support is experimental** (`--listen6`). TCP over IPv6 works fully. UDP over IPv6 has issues on macOS due to kernel ENOBUFS limitations with `send_to()`. On Linux, IPv6 UDP works correctly.
-- **Multi-connection UDP** is supported. MikroTik's multi-connection mode sends from multiple source ports, all accepted by the server.
+See [KNOWN_ISSUES.md](KNOWN_ISSUES.md) for the full list including:
+
+- **IPv6 UDP on macOS** — server TX hits ENOBUFS, use IPv4 or deploy on Linux
+- **macOS UDP send buffer** — first 2-3 seconds unreliable on unlimited speed tests
+- **Windows binaries** — cross-compiled but untested
+- **IPv6 UDP on Linux** — untested, likely works fine
+
+Contributions and bug reports welcome: https://git.manko.yoga/manawenuz/btest-rs/issues
 
 ## Documentation
 

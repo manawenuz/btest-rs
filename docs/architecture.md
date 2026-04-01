@@ -205,6 +205,20 @@ The EC-SRP5 implementation uses `num-bigint` for Curve25519 Weierstrass-form ell
 
 The syslog and CSV modules use `Mutex<Option<...>>` global statics. This avoids threading state through every function call while remaining safe. Both modules are initialized once at startup and used from any async task via their public API functions.
 
+### 9. Shared BandwidthState for client duration timeout
+
+When running with `--duration`, the tokio timeout cancels the client future. To preserve stats accumulated during the test, `BandwidthState` is created in `main()` and passed as an `Arc` into `run_client()`. The state survives cancellation because `main()` holds a reference. The `record_interval()` method accumulates totals that `summary()` returns.
+
+### 10. IPv6 socket handling
+
+IPv6 requires special handling on macOS:
+- UDP sockets bind to `[::]` for IPv6 peers, `0.0.0.0` for IPv4
+- Socket send/receive buffers set to 4MB via `socket2` before wrapping with tokio
+- `SocketAddr::new()` used instead of string formatting (avoids `[addr]:port` parsing issues)
+- Connected sockets preferred for single-connection (avoids ENOBUFS on `send_to()`)
+- NDP probe packet sent before data blast to populate neighbor cache
+- Adaptive backoff on ENOBUFS (200μs→10ms, resets on success)
+
 ## File Layout
 
 ```
@@ -239,6 +253,17 @@ btest-rs/
 │   ├── ecsrp5-research.md       # EC-SRP5 reverse-engineering notes
 │   └── man/
 │       └── btest.1              # Unix manual page (troff format)
+├── tests/
+│   ├── integration_test.rs      # Basic server/client handshake tests
+│   ├── ecsrp5_test.rs           # EC-SRP5 authentication tests
+│   └── full_integration_test.rs # Comprehensive: all protocols, IPv4/6, CSV, syslog
+├── deploy/
+│   └── syslog-ng-btest.conf    # syslog-ng configuration for btest events
+├── proto-test/                  # Python EC-SRP5 prototype (research branch)
+│   ├── btest_ecsrp5_client.py  # Working Python btest EC-SRP5 client
+│   ├── btest_mitm.py           # MITM proxy for protocol analysis
+│   └── elliptic_curves.py      # Curve25519 Weierstrass (MarginResearch)
+├── KNOWN_ISSUES.md              # Known bugs and platform limitations
 ├── Dockerfile                   # Production Docker image (multi-stage)
 ├── Dockerfile.cross             # Cross-compilation for Linux x86_64
 ├── docker-compose.yml           # Docker Compose configuration
