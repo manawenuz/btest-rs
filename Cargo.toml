@@ -23,7 +23,7 @@ required-features = ["pro"]
 
 [features]
 default = []
-pro = ["dep:rusqlite", "dep:ldap3"]
+pro = ["dep:rusqlite", "dep:ldap3", "dep:axum", "dep:tower-http", "dep:serde", "dep:serde_json", "dep:askama"]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -43,6 +43,11 @@ sha2 = "0.11.0"
 hostname = "0.4.2"
 rusqlite = { version = "0.39.0", features = ["bundled"], optional = true }
 ldap3 = { version = "0.12.1", optional = true }
+axum = { version = "0.8.8", features = ["tokio"], optional = true }
+tower-http = { version = "0.6.8", features = ["fs", "cors"], optional = true }
+serde = { version = "1.0.228", features = ["derive"], optional = true }
+serde_json = { version = "1.0.149", optional = true }
+askama = { version = "0.15.6", optional = true }
 
 [profile.release]
 opt-level = 3

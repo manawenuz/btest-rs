@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>btest-rs Public Bandwidth Test Server</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: #0f1117;
+    color: #e1e4e8;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+  .container {
+    max-width: 560px;
+    width: 90%;
+    text-align: center;
+    padding: 2rem;
+  }
+  h1 {
+    font-size: 2rem;
+    margin-bottom: 0.5rem;
+    color: #58a6ff;
+  }
+  .subtitle {
+    color: #8b949e;
+    margin-bottom: 2rem;
+    line-height: 1.5;
+  }
+  .search-box {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1.5rem;
+  }
+  .search-box input {
+    flex: 1;
+    padding: 0.75rem 1rem;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    background: #161b22;
+    color: #e1e4e8;
+    font-size: 1rem;
+    outline: none;
+  }
+  .search-box input:focus {
+    border-color: #58a6ff;
+  }
+  .search-box input::placeholder {
+    color: #484f58;
+  }
+  .search-box button {
+    padding: 0.75rem 1.5rem;
+    background: #238636;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-size: 1rem;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .search-box button:hover {
+    background: #2ea043;
+  }
+  .info {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 1.5rem;
+    text-align: left;
+    line-height: 1.6;
+    color: #8b949e;
+  }
+  .info h3 {
+    color: #e1e4e8;
+    margin-bottom: 0.5rem;
+  }
+  .info code {
+    background: #0d1117;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    font-size: 0.9em;
+    color: #58a6ff;
+  }
+  .auto-link {
+    margin-top: 1rem;
+    font-size: 0.9rem;
+  }
+  .auto-link a {
+    color: #58a6ff;
+    text-decoration: none;
+  }
+  .auto-link a:hover {
+    text-decoration: underline;
+  }
+  .footer {
+    margin-top: 2rem;
+    color: #484f58;
+    font-size: 0.8rem;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>btest-rs</h1>
+  <p class="subtitle">Public MikroTik Bandwidth Test Server &mdash; view your test results and history.</p>
+
+  <form class="search-box" id="ip-form" onsubmit="return goToDashboard()">
+    <input type="text" id="ip-input" placeholder="Enter your IP address (e.g. 203.0.113.5)" autocomplete="off">
+    <button type="submit">View Results</button>
+  </form>
+
+  <div class="auto-link" id="auto-detect">
+    Detecting your IP...
+  </div>
+
+  <div class="info">
+    <h3>How it works</h3>
+    <p>
+      Run a bandwidth test from your MikroTik router targeting this server.
+      After the test completes, enter your public IP above to see
+      throughput charts, session history, and aggregate statistics.
+    </p>
+    <p style="margin-top: 0.5rem;">
+      Example: <code>/tool bandwidth-test address=this-server protocol=tcp direction=both</code>
+    </p>
+  </div>
+
+  <div class="footer">Powered by btest-rs</div>
+</div>
+
+<script>
+function goToDashboard() {
+  var ip = document.getElementById('ip-input').value.trim();
+  if (ip) {
+    window.location.href = '/dashboard/' + encodeURIComponent(ip);
+  }
+  return false;
+}
+
+// Auto-detect visitor IP and offer a direct link
+fetch('https://api.ipify.org?format=json')
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    if (data.ip) {
+      document.getElementById('ip-input').value = data.ip;
+      document.getElementById('auto-detect').innerHTML =
+        'Detected IP: <a href="/dashboard/' + encodeURIComponent(data.ip) + '">' + data.ip + '</a> &mdash; click to view your dashboard';
+    }
+  })
+  .catch(function() {
+    document.getElementById('auto-detect').textContent = '';
+  });
+</script>
+</body>
+</html>

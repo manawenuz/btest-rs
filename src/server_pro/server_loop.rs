@@ -15,7 +15,7 @@ use btest_rs::protocol::*;
 use btest_rs::bandwidth::BandwidthState;
 
 use super::enforcer::{QuotaEnforcer, StopReason};
-use super::quota::QuotaManager;
+use super::quota::{Direction, QuotaManager};
 use super::user_db::UserDb;
 
 /// Run the pro server with quota enforcement.
@@ -70,7 +70,7 @@ pub async fn run_pro_server(
         tracing::info!("New connection from {}", peer);
 
         // Pre-connection IP check
-        if let Err(e) = quota_mgr.check_ip(&peer.ip()) {
+        if let Err(e) = quota_mgr.check_ip(&peer.ip(), Direction::Both) {
             tracing::warn!("Rejected {} — {}", peer, e);
             btest_rs::syslog_logger::auth_failure(
                 &peer.to_string(), "-", "-", &format!("{}", e),

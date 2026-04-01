@@ -12,6 +12,7 @@ mod user_db;
 mod quota;
 mod enforcer;
 mod server_loop;
+mod web;
 mod ldap_auth;
 
 use clap::Parser;
@@ -88,9 +89,25 @@ struct Cli {
     #[arg(long = "max-duration", default_value_t = 300)]
     max_duration: u64,
 
+    /// Daily inbound (client→server) limit per IP in bytes (0 = unlimited)
+    #[arg(long = "ip-daily-in", default_value_t = 0)]
+    ip_daily_in: u64,
+
+    /// Daily outbound (server→client) limit per IP in bytes (0 = unlimited)
+    #[arg(long = "ip-daily-out", default_value_t = 0)]
+    ip_daily_out: u64,
+
     /// How often to check quotas during a test in seconds
     #[arg(long = "quota-check-interval", default_value_t = 10)]
     quota_check_interval: u64,
+
+    /// Web dashboard port (0 = disabled)
+    #[arg(long = "web-port", default_value_t = 8080)]
+    web_port: u16,
+
+    /// Shared password for public mode (all users use this password)
+    #[arg(long = "shared-password")]
+    shared_password: Option<String>,
 
     /// Use EC-SRP5 authentication
     #[arg(long = "ecsrp5")]
@@ -242,6 +259,8 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Initialize quota manager
+    // Directional IP quotas default to 0 (unlimited) unless the combined
+    // quota is set, in which case the same value is used for each direction.
     let quota_mgr = quota::QuotaManager::new(
         db.clone(),
         cli.daily_quota,
@@ -250,6 +269,12 @@ async fn main() -> anyhow::Result<()> {
         cli.ip_daily,
         cli.ip_weekly,
         cli.ip_monthly,
+        cli.ip_daily,    // ip_daily_inbound
+        cli.ip_daily,    // ip_daily_outbound
+        cli.ip_weekly,   // ip_weekly_inbound
+        cli.ip_weekly,   // ip_weekly_outbound
+        cli.ip_monthly,  // ip_monthly_inbound
+        cli.ip_monthly,  // ip_monthly_outbound
         cli.max_conn_per_ip,
         cli.max_duration,
     );
@@ -267,6 +292,22 @@ async fn main() -> anyhow::Result<()> {
         "Limits: max_conn_per_ip={}, max_duration={}s",
         cli.max_conn_per_ip, cli.max_duration,
     );
+
+    // Start web dashboard if port > 0
+    if cli.web_port > 0 {
+        let web_db = db.clone();
+        let web_port = cli.web_port;
+        tokio::spawn(async move {
+            tracing::info!("Web dashboard starting on http://0.0.0.0:{}", web_port);
+            let app = web::create_router(web_db);
+            let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", web_port))
+                .await
+                .expect("Failed to bind web dashboard port");
+            if let Err(e) = axum::serve(listener, app).await {
+                tracing::error!("Web dashboard error: {}", e);
+            }
+        });
+    }
 
     tracing::info!("btest-server-pro starting on port {}", cli.port);
 

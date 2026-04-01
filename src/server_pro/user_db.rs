@@ -29,6 +29,39 @@ pub struct UsageRecord {
     pub test_count: u32,
 }
 
+/// Per-second bandwidth interval data for graphing.
+#[derive(Debug, Clone)]
+pub struct IntervalData {
+    pub interval_num: i32,
+    pub tx_mbps: f64,
+    pub rx_mbps: f64,
+    pub local_cpu: i32,
+    pub remote_cpu: i32,
+    pub lost: i64,
+}
+
+/// Summary of a single test session.
+#[derive(Debug, Clone)]
+pub struct SessionSummary {
+    pub id: i64,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub protocol: String,
+    pub direction: String,
+    pub tx_bytes: u64,
+    pub rx_bytes: u64,
+}
+
+/// Aggregate statistics for an IP address.
+#[derive(Debug, Clone)]
+pub struct IpStats {
+    pub total_tests: u64,
+    pub total_inbound: u64,
+    pub total_outbound: u64,
+    pub avg_tx_mbps: f64,
+    pub avg_rx_mbps: f64,
+}
+
 impl UserDb {
     pub fn open(path: &str) -> anyhow::Result<Self> {
         let conn = Connection::open(path)?;
@@ -65,8 +98,8 @@ impl UserDb {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ip TEXT NOT NULL,
                 date TEXT NOT NULL,
-                tx_bytes INTEGER DEFAULT 0,
-                rx_bytes INTEGER DEFAULT 0,
+                inbound_bytes INTEGER DEFAULT 0,
+                outbound_bytes INTEGER DEFAULT 0,
                 test_count INTEGER DEFAULT 0,
                 UNIQUE(ip, date)
             );
@@ -83,9 +116,24 @@ impl UserDb {
                 direction TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS test_intervals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL,
+                interval_num INTEGER NOT NULL,
+                tx_bytes INTEGER DEFAULT 0,
+                rx_bytes INTEGER DEFAULT 0,
+                tx_mbps REAL DEFAULT 0,
+                rx_mbps REAL DEFAULT 0,
+                local_cpu INTEGER DEFAULT 0,
+                remote_cpu INTEGER DEFAULT 0,
+                lost_packets INTEGER DEFAULT 0,
+                FOREIGN KEY(session_id) REFERENCES sessions(id)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_usage_user_date ON usage(username, date);
             CREATE INDEX IF NOT EXISTS idx_ip_usage_date ON ip_usage(ip, date);
             CREATE INDEX IF NOT EXISTS idx_sessions_peer ON sessions(peer_ip, started_at);
+            CREATE INDEX IF NOT EXISTS idx_intervals_session ON test_intervals(session_id);
         ")?;
         Ok(())
     }
@@ -197,14 +245,18 @@ impl UserDb {
     pub fn record_ip_usage(&self, ip: &str, tx_bytes: u64, rx_bytes: u64) -> anyhow::Result<()> {
         let conn = self.conn.lock().unwrap();
         let today = chrono_date_today();
+        // From the server's perspective: inbound = data coming FROM the client (rx),
+        // outbound = data going TO the client (tx).
+        let inbound = rx_bytes;
+        let outbound = tx_bytes;
         conn.execute(
-            "INSERT INTO ip_usage (ip, date, tx_bytes, rx_bytes, test_count)
+            "INSERT INTO ip_usage (ip, date, inbound_bytes, outbound_bytes, test_count)
              VALUES (?1, ?2, ?3, ?4, 1)
              ON CONFLICT(ip, date) DO UPDATE SET
-                tx_bytes = tx_bytes + ?3,
-                rx_bytes = rx_bytes + ?4,
+                inbound_bytes = inbound_bytes + ?3,
+                outbound_bytes = outbound_bytes + ?4,
                 test_count = test_count + 1",
-            params![ip, today, tx_bytes as i64, rx_bytes as i64],
+            params![ip, today, inbound as i64, outbound as i64],
         )?;
         Ok(())
     }
@@ -213,12 +265,12 @@ impl UserDb {
         let conn = self.conn.lock().unwrap();
         let today = chrono_date_today();
         let result = conn.query_row(
-            "SELECT COALESCE(SUM(tx_bytes),0), COALESCE(SUM(rx_bytes),0) FROM ip_usage WHERE ip = ?1 AND date = ?2",
+            "SELECT COALESCE(SUM(inbound_bytes),0), COALESCE(SUM(outbound_bytes),0) FROM ip_usage WHERE ip = ?1 AND date = ?2",
             params![ip, today],
             |row| {
-                let a: i64 = row.get(0)?;
-                let b: i64 = row.get(1)?;
-                Ok((a as u64, b as u64))
+                let inbound: i64 = row.get(0)?;
+                let outbound: i64 = row.get(1)?;
+                Ok((inbound as u64, outbound as u64))
             },
         )?;
         Ok(result)
@@ -227,13 +279,13 @@ impl UserDb {
     pub fn get_ip_weekly_usage(&self, ip: &str) -> anyhow::Result<(u64, u64)> {
         let conn = self.conn.lock().unwrap();
         let result = conn.query_row(
-            "SELECT COALESCE(SUM(tx_bytes),0), COALESCE(SUM(rx_bytes),0) FROM ip_usage
+            "SELECT COALESCE(SUM(inbound_bytes),0), COALESCE(SUM(outbound_bytes),0) FROM ip_usage
              WHERE ip = ?1 AND date >= date('now', '-7 days')",
             params![ip],
             |row| {
-                let a: i64 = row.get(0)?;
-                let b: i64 = row.get(1)?;
-                Ok((a as u64, b as u64))
+                let inbound: i64 = row.get(0)?;
+                let outbound: i64 = row.get(1)?;
+                Ok((inbound as u64, outbound as u64))
             },
         )?;
         Ok(result)
@@ -242,16 +294,114 @@ impl UserDb {
     pub fn get_ip_monthly_usage(&self, ip: &str) -> anyhow::Result<(u64, u64)> {
         let conn = self.conn.lock().unwrap();
         let result = conn.query_row(
-            "SELECT COALESCE(SUM(tx_bytes),0), COALESCE(SUM(rx_bytes),0) FROM ip_usage
+            "SELECT COALESCE(SUM(inbound_bytes),0), COALESCE(SUM(outbound_bytes),0) FROM ip_usage
              WHERE ip = ?1 AND date >= date('now', '-30 days')",
             params![ip],
             |row| {
-                let a: i64 = row.get(0)?;
-                let b: i64 = row.get(1)?;
-                Ok((a as u64, b as u64))
+                let inbound: i64 = row.get(0)?;
+                let outbound: i64 = row.get(1)?;
+                Ok((inbound as u64, outbound as u64))
             },
         )?;
         Ok(result)
+    }
+
+    // --- Per-IP directional usage (single-column queries) ---
+
+    /// Record inbound-only IP usage (data coming FROM the client).
+    pub fn record_ip_inbound_usage(&self, ip: &str, bytes: u64) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let today = chrono_date_today();
+        conn.execute(
+            "INSERT INTO ip_usage (ip, date, inbound_bytes, test_count)
+             VALUES (?1, ?2, ?3, 0)
+             ON CONFLICT(ip, date) DO UPDATE SET
+                inbound_bytes = inbound_bytes + ?3",
+            params![ip, today, bytes as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Record outbound-only IP usage (data going TO the client).
+    pub fn record_ip_outbound_usage(&self, ip: &str, bytes: u64) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let today = chrono_date_today();
+        conn.execute(
+            "INSERT INTO ip_usage (ip, date, outbound_bytes, test_count)
+             VALUES (?1, ?2, ?3, 0)
+             ON CONFLICT(ip, date) DO UPDATE SET
+                outbound_bytes = outbound_bytes + ?3",
+            params![ip, today, bytes as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Get daily inbound bytes for an IP.
+    pub fn get_ip_daily_inbound(&self, ip: &str) -> anyhow::Result<u64> {
+        let conn = self.conn.lock().unwrap();
+        let today = chrono_date_today();
+        let result: i64 = conn.query_row(
+            "SELECT COALESCE(SUM(inbound_bytes),0) FROM ip_usage WHERE ip = ?1 AND date = ?2",
+            params![ip, today],
+            |row| row.get(0),
+        )?;
+        Ok(result as u64)
+    }
+
+    /// Get weekly inbound bytes for an IP.
+    pub fn get_ip_weekly_inbound(&self, ip: &str) -> anyhow::Result<u64> {
+        let conn = self.conn.lock().unwrap();
+        let result: i64 = conn.query_row(
+            "SELECT COALESCE(SUM(inbound_bytes),0) FROM ip_usage WHERE ip = ?1 AND date >= date('now', '-7 days')",
+            params![ip],
+            |row| row.get(0),
+        )?;
+        Ok(result as u64)
+    }
+
+    /// Get monthly inbound bytes for an IP.
+    pub fn get_ip_monthly_inbound(&self, ip: &str) -> anyhow::Result<u64> {
+        let conn = self.conn.lock().unwrap();
+        let result: i64 = conn.query_row(
+            "SELECT COALESCE(SUM(inbound_bytes),0) FROM ip_usage WHERE ip = ?1 AND date >= date('now', '-30 days')",
+            params![ip],
+            |row| row.get(0),
+        )?;
+        Ok(result as u64)
+    }
+
+    /// Get daily outbound bytes for an IP.
+    pub fn get_ip_daily_outbound(&self, ip: &str) -> anyhow::Result<u64> {
+        let conn = self.conn.lock().unwrap();
+        let today = chrono_date_today();
+        let result: i64 = conn.query_row(
+            "SELECT COALESCE(SUM(outbound_bytes),0) FROM ip_usage WHERE ip = ?1 AND date = ?2",
+            params![ip, today],
+            |row| row.get(0),
+        )?;
+        Ok(result as u64)
+    }
+
+    /// Get weekly outbound bytes for an IP.
+    pub fn get_ip_weekly_outbound(&self, ip: &str) -> anyhow::Result<u64> {
+        let conn = self.conn.lock().unwrap();
+        let result: i64 = conn.query_row(
+            "SELECT COALESCE(SUM(outbound_bytes),0) FROM ip_usage WHERE ip = ?1 AND date >= date('now', '-7 days')",
+            params![ip],
+            |row| row.get(0),
+        )?;
+        Ok(result as u64)
+    }
+
+    /// Get monthly outbound bytes for an IP.
+    pub fn get_ip_monthly_outbound(&self, ip: &str) -> anyhow::Result<u64> {
+        let conn = self.conn.lock().unwrap();
+        let result: i64 = conn.query_row(
+            "SELECT COALESCE(SUM(outbound_bytes),0) FROM ip_usage WHERE ip = ?1 AND date >= date('now', '-30 days')",
+            params![ip],
+            |row| row.get(0),
+        )?;
+        Ok(result as u64)
     }
 
     // --- Session tracking ---
@@ -272,6 +422,125 @@ impl UserDb {
             params![tx_bytes as i64, rx_bytes as i64, session_id],
         )?;
         Ok(())
+    }
+
+    // --- Per-second interval tracking ---
+
+    /// Record a single per-second interval data point for a session.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_test_interval(
+        &self,
+        session_id: i64,
+        interval_num: i32,
+        tx_bytes: u64,
+        rx_bytes: u64,
+        tx_mbps: f64,
+        rx_mbps: f64,
+        local_cpu: i32,
+        remote_cpu: i32,
+        lost: i64,
+    ) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO test_intervals (session_id, interval_num, tx_bytes, rx_bytes, tx_mbps, rx_mbps, local_cpu, remote_cpu, lost_packets)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                session_id,
+                interval_num,
+                tx_bytes as i64,
+                rx_bytes as i64,
+                tx_mbps,
+                rx_mbps,
+                local_cpu,
+                remote_cpu,
+                lost,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Retrieve all interval data points for a given session, ordered by interval number.
+    pub fn get_session_intervals(&self, session_id: i64) -> anyhow::Result<Vec<IntervalData>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT interval_num, tx_mbps, rx_mbps, local_cpu, remote_cpu, lost_packets
+             FROM test_intervals WHERE session_id = ?1 ORDER BY interval_num"
+        )?;
+        let rows = stmt.query_map(params![session_id], |row| {
+            Ok(IntervalData {
+                interval_num: row.get(0)?,
+                tx_mbps: row.get(1)?,
+                rx_mbps: row.get(2)?,
+                local_cpu: row.get(3)?,
+                remote_cpu: row.get(4)?,
+                lost: row.get(5)?,
+            })
+        })?.filter_map(|r| r.ok()).collect();
+        Ok(rows)
+    }
+
+    /// Return the last N sessions for a given IP address, most recent first.
+    pub fn get_ip_sessions(&self, ip: &str, limit: u32) -> anyhow::Result<Vec<SessionSummary>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, started_at, ended_at, protocol, direction, tx_bytes, rx_bytes
+             FROM sessions WHERE peer_ip = ?1 ORDER BY started_at DESC LIMIT ?2"
+        )?;
+        let rows = stmt.query_map(params![ip, limit], |row| {
+            Ok(SessionSummary {
+                id: row.get(0)?,
+                started_at: row.get(1)?,
+                ended_at: row.get(2)?,
+                protocol: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                direction: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                tx_bytes: row.get::<_, i64>(5).map(|v| v as u64)?,
+                rx_bytes: row.get::<_, i64>(6).map(|v| v as u64)?,
+            })
+        })?.filter_map(|r| r.ok()).collect();
+        Ok(rows)
+    }
+
+    /// Return aggregate statistics for an IP address across all sessions.
+    pub fn get_ip_stats(&self, ip: &str) -> anyhow::Result<IpStats> {
+        let conn = self.conn.lock().unwrap();
+        let result = conn.query_row(
+            "SELECT
+                COUNT(*) as total_tests,
+                COALESCE(SUM(inbound_bytes), 0) as total_inbound,
+                COALESCE(SUM(outbound_bytes), 0) as total_outbound
+             FROM ip_usage WHERE ip = ?1",
+            params![ip],
+            |row| {
+                let total_tests: i64 = row.get(0)?;
+                let total_inbound: i64 = row.get(1)?;
+                let total_outbound: i64 = row.get(2)?;
+                Ok((total_tests as u64, total_inbound as u64, total_outbound as u64))
+            },
+        )?;
+
+        // Compute average Mbps from test_intervals joined through sessions
+        let (avg_tx, avg_rx) = conn.query_row(
+            "SELECT
+                COALESCE(AVG(ti.tx_mbps), 0.0),
+                COALESCE(AVG(ti.rx_mbps), 0.0)
+             FROM test_intervals ti
+             INNER JOIN sessions s ON ti.session_id = s.id
+             WHERE s.peer_ip = ?1",
+            params![ip],
+            |row| {
+                let avg_tx: f64 = row.get(0)?;
+                let avg_rx: f64 = row.get(1)?;
+                Ok((avg_tx, avg_rx))
+            },
+        )?;
+
+        Ok(IpStats {
+            total_tests: result.0,
+            total_inbound: result.1,
+            total_outbound: result.2,
+            avg_tx_mbps: avg_tx,
+            avg_rx_mbps: avg_rx,
+        })
     }
 
     pub fn delete_user(&self, username: &str) -> anyhow::Result<bool> {
