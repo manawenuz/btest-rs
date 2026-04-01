@@ -242,7 +242,7 @@ async fn test_csv_created_client() {
     // Write result like main.rs does
     btest_rs::csv_output::write_result(
         "127.0.0.1", port, "TCP", "receive",
-        2, tx, rx, lost, "none",
+        2, tx, rx, lost, 0, 0, "none",
     );
 
     // Verify CSV exists and has data
@@ -251,7 +251,12 @@ async fn test_csv_created_client() {
     assert!(lines.len() >= 2, "CSV should have header + at least 1 row, got {} lines", lines.len());
     assert!(lines[0].starts_with("timestamp,"), "CSV header missing");
     assert!(lines[1].contains("TCP"), "CSV row should contain protocol");
-    assert!(!lines[1].contains(",0,0,0,"), "CSV should have non-zero bytes");
+    // Check that tx or rx bytes are non-zero (the 7th or 8th CSV field)
+    let fields: Vec<&str> = lines[1].split(',').collect();
+    assert!(fields.len() >= 10, "CSV row should have enough fields");
+    let tx_bytes: u64 = fields[8].parse().unwrap_or(0);
+    let rx_bytes: u64 = fields[9].parse().unwrap_or(0);
+    assert!(tx_bytes > 0 || rx_bytes > 0, "CSV should have non-zero bytes: tx={} rx={}", tx_bytes, rx_bytes);
 
     let _ = std::fs::remove_file(&csv_path);
 }

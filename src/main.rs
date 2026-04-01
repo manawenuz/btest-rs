@@ -226,9 +226,11 @@ async fn main() -> anyhow::Result<()> {
         // Write CSV if enabled
         if csv_output::is_enabled() {
             let auth_type = if cli.auth_user.is_some() { "auth" } else { "none" };
+            let local_cpu = cpu::get();
+            let remote_cpu = shared_state.remote_cpu.load(std::sync::atomic::Ordering::Relaxed);
             csv_output::write_result(
                 &host, cli.port, proto_str, dir_str,
-                elapsed, total_tx, total_rx, total_lost, auth_type,
+                elapsed, total_tx, total_rx, total_lost, local_cpu, remote_cpu, auth_type,
             );
         }
     } else {

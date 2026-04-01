@@ -12,7 +12,7 @@ use std::time::SystemTime;
 static CSV_FILE: Mutex<Option<String>> = Mutex::new(None);
 static QUIET: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-const HEADER: &str = "timestamp,host,port,protocol,direction,duration_s,tx_avg_mbps,rx_avg_mbps,tx_bytes,rx_bytes,lost_packets,auth_type";
+const HEADER: &str = "timestamp,host,port,protocol,direction,duration_s,tx_avg_mbps,rx_avg_mbps,tx_bytes,rx_bytes,lost_packets,local_cpu_pct,remote_cpu_pct,auth_type";
 
 /// Initialize CSV output. Creates file with headers if needed.
 pub fn init(path: &str) -> std::io::Result<()> {
@@ -45,6 +45,8 @@ pub fn write_result(
     tx_bytes: u64,
     rx_bytes: u64,
     lost_packets: u64,
+    local_cpu: u8,
+    remote_cpu: u8,
     auth_type: &str,
 ) {
     let guard = CSV_FILE.lock().unwrap();
@@ -66,9 +68,10 @@ pub fn write_result(
             .as_secs();
 
         let row = format!(
-            "{},{},{},{},{},{},{:.2},{:.2},{},{},{},{}",
+            "{},{},{},{},{},{},{:.2},{:.2},{},{},{},{},{},{}",
             now, host, port, protocol, direction, duration_secs,
-            tx_mbps, rx_mbps, tx_bytes, rx_bytes, lost_packets, auth_type,
+            tx_mbps, rx_mbps, tx_bytes, rx_bytes, lost_packets,
+            local_cpu, remote_cpu, auth_type,
         );
 
         if let Ok(mut f) = OpenOptions::new().append(true).open(path) {

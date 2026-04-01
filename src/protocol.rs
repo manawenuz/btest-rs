@@ -144,8 +144,8 @@ impl StatusMessage {
     pub fn serialize(&self) -> [u8; STATUS_MSG_SIZE] {
         let mut buf = [0u8; STATUS_MSG_SIZE];
         buf[0] = STATUS_MSG_TYPE;
-        // Byte 1: CPU load percentage (0-100)
-        buf[1] = self.cpu_load;
+        // Byte 1: CPU load with high bit set (MikroTik format: 0x80 | percentage)
+        buf[1] = 0x80 | (self.cpu_load & 0x7F);
         buf[2] = 0;
         buf[3] = 0;
         // Bytes 4-7: sequence number (LE)
@@ -156,8 +156,11 @@ impl StatusMessage {
     }
 
     pub fn deserialize(buf: &[u8; STATUS_MSG_SIZE]) -> Self {
+        // MikroTik encodes CPU with high bit set: actual = byte & 0x7F
+        let raw_cpu = buf[1];
+        let cpu = if raw_cpu > 128 { raw_cpu & 0x7F } else { raw_cpu };
         Self {
-            cpu_load: buf[1],
+            cpu_load: cpu.min(100),
             seq: u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]),
             bytes_received: u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]),
         }
