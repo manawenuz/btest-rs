@@ -367,6 +367,7 @@ async fn handle_client(
 // --- TCP Test Server ---
 
 /// Public TX task for multi-connection use by server_pro.
+#[cfg(feature = "pro")]
 pub async fn tcp_tx_task(
     writer: tokio::net::tcp::OwnedWriteHalf,
     tx_size: usize,
@@ -377,6 +378,7 @@ pub async fn tcp_tx_task(
 }
 
 /// Public RX task for multi-connection use by server_pro.
+#[cfg(feature = "pro")]
 pub async fn tcp_rx_task(
     reader: tokio::net::tcp::OwnedReadHalf,
     state: Arc<BandwidthState>,
@@ -386,6 +388,7 @@ pub async fn tcp_rx_task(
 
 /// Run a TCP bandwidth test on an already-authenticated stream.
 /// Public API for use by server_pro.
+#[cfg(feature = "pro")]
 pub async fn run_tcp_test(
     stream: TcpStream,
     cmd: Command,
@@ -470,6 +473,7 @@ async fn run_tcp_test_inner(stream: TcpStream, cmd: Command, state: Arc<Bandwidt
 }
 
 /// Public API for multi-connection TCP test with external state. Used by server_pro.
+#[cfg(feature = "pro")]
 pub async fn run_tcp_multiconn_test(
     streams: Vec<TcpStream>,
     cmd: Command,
@@ -686,6 +690,7 @@ async fn tcp_status_sender(
 
 /// Run a UDP bandwidth test on an already-authenticated stream.
 /// Public API for use by server_pro. Caller provides the UDP port offset.
+#[cfg(feature = "pro")]
 pub async fn run_udp_test(
     stream: &mut TcpStream,
     peer: SocketAddr,

@@ -2,6 +2,25 @@
 
 A Rust reimplementation of the [MikroTik Bandwidth Test (btest)](https://wiki.mikrotik.com/wiki/Manual:Tools/Bandwidth_Test) protocol. Both server and client modes, fully compatible with MikroTik RouterOS devices.
 
+## Free Public Servers
+
+Test your MikroTik link speed right now — no setup, no registration:
+
+| Server | Location | Dashboard |
+|--------|----------|-----------|
+| `104.225.217.60` | US | [btest.home.kg](https://btest.home.kg) |
+| `188.245.59.196` | EU | [btest.mikata.ru](https://btest.mikata.ru) |
+
+```
+/tool bandwidth-test address=104.225.217.60 user=btest password=btest protocol=tcp direction=both
+```
+
+After the test, visit `https://btest.home.kg/dashboard/YOUR_IP` to see your results, throughput history, and quota usage. Per-IP limits: 2 GB daily / 8 GB weekly / 24 GB monthly.
+
+> **Note:** TCP is recommended for remote testing. UDP bidirectional through NAT will only show one direction — this is a btest protocol limitation, not specific to btest-rs. See [KNOWN_ISSUES.md](KNOWN_ISSUES.md) for details.
+
+Want to run your own public server? Build with `cargo build --release --features pro` — see [Server Pro](#server-pro) below.
+
 ## Features
 
 - **Full protocol support** -- TCP and UDP data transfer, IPv4 and IPv6
@@ -16,7 +35,7 @@ A Rust reimplementation of the [MikroTik Bandwidth Test (btest)](https://wiki.mi
 - **Quiet mode** -- suppress terminal output for scripted/automated use
 - **NAT traversal** -- probe packet to open firewall holes for UDP receive
 - **Single static binary** -- ~2 MB, zero runtime dependencies (musl build)
-- **Cross-platform** -- macOS, Linux (x86_64, ARM64), Docker
+- **Cross-platform** -- macOS, Linux (x86_64, ARM64, ARMv7), Windows, Android (Termux), Docker
 - **Async I/O** -- tokio-based, handles many concurrent connections efficiently
 
 ## Performance
@@ -61,6 +80,10 @@ sudo mv btest /usr/local/bin/
 
 # Windows
 # Download btest-windows-x86_64.zip from releases
+
+# Android (Termux, no root needed)
+curl -L <release-url>/btest-android-aarch64.tar.gz | tar xz
+mv btest $PREFIX/bin/
 ```
 
 ### Raspberry Pi
@@ -266,6 +289,29 @@ scripts/test-local.sh                # Loopback self-test
 scripts/test-mikrotik.sh <ip>        # Test against MikroTik device
 scripts/test-docker.sh               # Docker container test
 ```
+
+## Server Pro
+
+An optional superset of the standard server with multi-user support, quotas, and a web dashboard. Build with `--features pro`:
+
+```bash
+cargo build --release --features pro --bin btest-server-pro
+```
+
+Features:
+- **SQLite user database** — add/remove users, per-user quotas
+- **Per-IP bandwidth quotas** — daily, weekly, monthly limits with inline byte budget enforcement
+- **Web dashboard** — session history, throughput stats, quota progress bars, JSON export
+- **TCP multi-connection** — handles MikroTik's default 20-connection mode
+- **MD5 auth against DB** — proper challenge-response verification
+
+```bash
+# Create a user and start the server
+btest-server-pro --users-db users.db useradd btest btest
+btest-server-pro --users-db users.db --ip-daily 2147483648 --ip-weekly 8589934592 --web-port 8080
+```
+
+The pro features are completely optional and don't affect the standard `btest` binary.
 
 ## Credits
 

@@ -73,6 +73,7 @@ impl BandwidthState {
     }
 
     /// Set the byte budget (total bytes allowed for the entire test).
+    #[cfg(feature = "pro")]
     pub fn set_budget(&self, budget: u64) {
         self.byte_budget.store(budget, std::sync::atomic::Ordering::SeqCst);
     }
