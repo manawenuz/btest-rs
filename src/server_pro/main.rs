@@ -11,6 +11,7 @@
 mod user_db;
 mod quota;
 mod enforcer;
+mod server_loop;
 mod ldap_auth;
 
 use clap::Parser;
@@ -241,7 +242,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Initialize quota manager
-    let _quota_mgr = quota::QuotaManager::new(
+    let quota_mgr = quota::QuotaManager::new(
         db.clone(),
         cli.daily_quota,
         cli.weekly_quota,
@@ -269,12 +270,17 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("btest-server-pro starting on port {}", cli.port);
 
-    // TODO: Run the enhanced server loop with quota checks and multi-user auth
-    // For now, delegate to the standard server
     let v4 = if cli.listen_addr.eq_ignore_ascii_case("none") { None } else { Some(cli.listen_addr) };
     let v6 = cli.listen6_addr;
 
-    btest_rs::server::run_server(cli.port, None, None, cli.ecsrp5, v4, v6).await?;
+    server_loop::run_pro_server(
+        cli.port,
+        cli.ecsrp5,
+        v4, v6,
+        db,
+        quota_mgr,
+        cli.quota_check_interval,
+    ).await?;
 
     Ok(())
 }
