@@ -88,14 +88,14 @@ docker run --rm -it btest-rs -c 192.168.88.1 -r -a admin -p password
 
 ```bash
 # Pull from Gitea registry
-docker pull git.manko.yoga/manawenuz/btest-rs:latest
+docker pull ghcr.io/manawenuz/btest-rs:latest
 
 # Run server
 docker run --rm -it \
   -p 2000:2000/tcp \
   -p 2001-2100:2001-2100/udp \
   -p 2257-2356:2257-2356/udp \
-  git.manko.yoga/manawenuz/btest-rs:latest -s -v
+  ghcr.io/manawenuz/btest-rs:latest -s -v
 ```
 
 ## Docker Compose
@@ -186,7 +186,7 @@ docker build -t btest-rs .
 
 # With custom tag
 docker build -t git.manko.yoga/manawenuz/btest-rs:latest .
-docker build -t git.manko.yoga/manawenuz/btest-rs:0.5.0 .
+docker build -t git.manko.yoga/manawenuz/btest-rs:0.6.0 .
 ```
 
 ### Multi-platform build
@@ -194,7 +194,7 @@ docker build -t git.manko.yoga/manawenuz/btest-rs:0.5.0 .
 ```bash
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
-  -t git.manko.yoga/manawenuz/btest-rs:latest \
+  -t ghcr.io/manawenuz/btest-rs:latest \
   --push .
 ```
 
@@ -209,9 +209,9 @@ docker build -t git.manko.yoga/manawenuz/btest-rs:latest .
 docker push git.manko.yoga/manawenuz/btest-rs:latest
 
 # Also tag with version
-docker tag git.manko.yoga/manawenuz/btest-rs:latest \
-           git.manko.yoga/manawenuz/btest-rs:0.5.0
-docker push git.manko.yoga/manawenuz/btest-rs:0.5.0
+docker tag ghcr.io/manawenuz/btest-rs:latest \
+           git.manko.yoga/manawenuz/btest-rs:0.6.0
+docker push git.manko.yoga/manawenuz/btest-rs:0.6.0
 ```
 
 ## Deployment Options
@@ -224,7 +224,7 @@ docker run -d --name btest-server \
   -p 2000:2000/tcp \
   -p 2001-2100:2001-2100/udp \
   -p 2257-2356:2257-2356/udp \
-  git.manko.yoga/manawenuz/btest-rs:latest \
+  ghcr.io/manawenuz/btest-rs:latest \
   -s -a admin -p password --ecsrp5 -v
 ```
 

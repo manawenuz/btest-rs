@@ -245,7 +245,9 @@ See [KNOWN_ISSUES.md](KNOWN_ISSUES.md) for the full list including:
 - **Windows binaries** — cross-compiled but untested
 - **IPv6 UDP on Linux** — untested, likely works fine
 
-Contributions and bug reports welcome: https://git.manko.yoga/manawenuz/btest-rs/issues
+Contributions and bug reports welcome:
+- https://github.com/manawenuz/btest-rs/issues
+- https://git.manko.yoga/manawenuz/btest-rs/issues
 
 ## Documentation
 
