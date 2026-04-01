@@ -1,11 +1,12 @@
 # Docker and Deployment Guide
 
-## Container Registry
+## Container Registries
 
 Images are published to:
 
 ```
-git.manko.yoga/manawenuz/btest-rs
+git.manko.yoga/manawenuz/btest-rs    # Gitea registry
+ghcr.io/manawenuz/btest-rs           # GitHub Container Registry
 ```
 
 ## Quick Start

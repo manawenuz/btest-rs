@@ -42,14 +42,51 @@ On wired gigabit links, expect line-rate performance in both TCP and UDP modes.
 cargo install --path .
 ```
 
-### Pre-built binary (Linux x86_64)
+### Pre-built binaries
+
+Download from [releases](https://git.manko.yoga/manawenuz/btest-rs/releases) or [GitHub releases](https://github.com/manawenuz/btest-rs/releases):
 
 ```bash
-# Cross-compile from macOS (requires Docker)
-scripts/build-linux.sh
+# Linux x86_64
+curl -L <release-url>/btest-linux-x86_64.tar.gz | tar xz
+sudo mv btest /usr/local/bin/
 
-# Copy to server
-scp dist/btest root@yourserver:/usr/local/bin/btest
+# Raspberry Pi 4/5 (64-bit OS)
+curl -L <release-url>/btest-linux-aarch64.tar.gz | tar xz
+sudo mv btest /usr/local/bin/
+
+# Raspberry Pi 3/Zero 2 (32-bit OS)
+curl -L <release-url>/btest-linux-armv7.tar.gz | tar xz
+sudo mv btest /usr/local/bin/
+
+# Windows
+# Download btest-windows-x86_64.zip from releases
+```
+
+### Raspberry Pi
+
+The static musl binaries run on any Raspberry Pi without dependencies:
+
+```bash
+# On the Pi — detect architecture and install
+ARCH=$(uname -m)
+case $ARCH in
+  aarch64) FILE=btest-linux-aarch64.tar.gz ;;
+  armv7l)  FILE=btest-linux-armv7.tar.gz ;;
+  *)       echo "Unsupported: $ARCH"; exit 1 ;;
+esac
+
+curl -LO "https://github.com/manawenuz/btest-rs/releases/latest/download/$FILE"
+tar xzf "$FILE"
+sudo mv btest /usr/local/bin/
+rm "$FILE"
+
+# Run as server
+btest -s -a admin -p password --ecsrp5
+
+# Or install as systemd service
+curl -LO https://raw.githubusercontent.com/manawenuz/btest-rs/main/scripts/install-service.sh
+sudo bash install-service.sh --auth-user admin --auth-pass password
 ```
 
 ### Docker
