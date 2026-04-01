@@ -38,25 +38,58 @@ pub fn init(target: &str) -> std::io::Result<()> {
 fn send(severity: u8, msg: &str) {
     let guard = SYSLOG.lock().unwrap();
     if let Some(ref sender) = *guard {
-        // RFC 5424 facility=1 (user), severity as given
-        let priority = 8 + severity; // facility=1 (user-level) * 8 + severity
-        let timestamp = chrono_lite_now();
+        // RFC 3164 (BSD syslog): <priority>Mon DD HH:MM:SS hostname program: message
+        // facility=16 (local0) * 8 + severity
+        let priority = 128 + severity;
+        let timestamp = bsd_timestamp();
         let syslog_msg = format!(
-            "<{}>1 {} {} btest-rs - - - {}",
+            "<{}>{} {} btest-rs: {}",
             priority, timestamp, sender.hostname, msg,
         );
         let _ = sender.socket.send_to(syslog_msg.as_bytes(), &sender.target);
     }
 }
 
-fn chrono_lite_now() -> String {
-    // Simple ISO 8601 timestamp without chrono dependency
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = now.as_secs();
-    // Good enough for syslog — not perfect but functional
-    format!("{}", secs)
+fn bsd_timestamp() -> String {
+    // RFC 3164 format: "Mon DD HH:MM:SS" (no year)
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    // Simple conversion — good enough for syslog
+    let secs_in_day = 86400u64;
+    let days = now / secs_in_day;
+    let time_of_day = now % secs_in_day;
+    let hours = time_of_day / 3600;
+    let minutes = (time_of_day % 3600) / 60;
+    let seconds = time_of_day % 60;
+
+    // Day of year calculation (approximate months)
+    let months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    let days_in_months = [31u64,28,31,30,31,30,31,31,30,31,30,31];
+
+    // Days since epoch to year/month/day
+    let mut y = 1970u64;
+    let mut remaining = days;
+    loop {
+        let leap = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) { 366 } else { 365 };
+        if remaining < leap { break; }
+        remaining -= leap;
+        y += 1;
+    }
+    let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+    let mut m = 0usize;
+    for i in 0..12 {
+        let mut d = days_in_months[i];
+        if i == 1 && leap { d += 1; }
+        if remaining < d { m = i; break; }
+        remaining -= d;
+    }
+    let day = remaining + 1;
+
+    format!("{} {:2} {:02}:{:02}:{:02}", months[m], day, hours, minutes, seconds)
 }
 
 // --- Public logging functions ---
