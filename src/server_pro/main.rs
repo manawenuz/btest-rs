@@ -89,13 +89,29 @@ struct Cli {
     #[arg(long = "max-duration", default_value_t = 300)]
     max_duration: u64,
 
-    /// Daily inbound (client→server) limit per IP in bytes (0 = unlimited)
+    /// Daily inbound (client→server) limit per IP in bytes (0 = use --ip-daily)
     #[arg(long = "ip-daily-in", default_value_t = 0)]
     ip_daily_in: u64,
 
-    /// Daily outbound (server→client) limit per IP in bytes (0 = unlimited)
+    /// Daily outbound (server→client) limit per IP in bytes (0 = use --ip-daily)
     #[arg(long = "ip-daily-out", default_value_t = 0)]
     ip_daily_out: u64,
+
+    /// Weekly inbound limit per IP in bytes (0 = use --ip-weekly)
+    #[arg(long = "ip-weekly-in", default_value_t = 0)]
+    ip_weekly_in: u64,
+
+    /// Weekly outbound limit per IP in bytes (0 = use --ip-weekly)
+    #[arg(long = "ip-weekly-out", default_value_t = 0)]
+    ip_weekly_out: u64,
+
+    /// Monthly inbound limit per IP in bytes (0 = use --ip-monthly)
+    #[arg(long = "ip-monthly-in", default_value_t = 0)]
+    ip_monthly_in: u64,
+
+    /// Monthly outbound limit per IP in bytes (0 = use --ip-monthly)
+    #[arg(long = "ip-monthly-out", default_value_t = 0)]
+    ip_monthly_out: u64,
 
     /// How often to check quotas during a test in seconds
     #[arg(long = "quota-check-interval", default_value_t = 10)]
@@ -259,8 +275,8 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Initialize quota manager
-    // Directional IP quotas default to 0 (unlimited) unless the combined
-    // quota is set, in which case the same value is used for each direction.
+    // Directional flags override combined: --ip-daily-in > --ip-daily > unlimited
+    let or_fallback = |specific: u64, combined: u64| if specific > 0 { specific } else { combined };
     let quota_mgr = quota::QuotaManager::new(
         db.clone(),
         cli.daily_quota,
@@ -269,12 +285,12 @@ async fn main() -> anyhow::Result<()> {
         cli.ip_daily,
         cli.ip_weekly,
         cli.ip_monthly,
-        cli.ip_daily,    // ip_daily_inbound
-        cli.ip_daily,    // ip_daily_outbound
-        cli.ip_weekly,   // ip_weekly_inbound
-        cli.ip_weekly,   // ip_weekly_outbound
-        cli.ip_monthly,  // ip_monthly_inbound
-        cli.ip_monthly,  // ip_monthly_outbound
+        or_fallback(cli.ip_daily_in, cli.ip_daily),
+        or_fallback(cli.ip_daily_out, cli.ip_daily),
+        or_fallback(cli.ip_weekly_in, cli.ip_weekly),
+        or_fallback(cli.ip_weekly_out, cli.ip_weekly),
+        or_fallback(cli.ip_monthly_in, cli.ip_monthly),
+        or_fallback(cli.ip_monthly_out, cli.ip_monthly),
         cli.max_conn_per_ip,
         cli.max_duration,
     );
