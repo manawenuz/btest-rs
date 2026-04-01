@@ -10,6 +10,7 @@
 
 mod user_db;
 mod quota;
+mod enforcer;
 mod ldap_auth;
 
 use clap::Parser;
@@ -85,6 +86,10 @@ struct Cli {
     /// Maximum test duration in seconds (0 = unlimited)
     #[arg(long = "max-duration", default_value_t = 300)]
     max_duration: u64,
+
+    /// How often to check quotas during a test in seconds
+    #[arg(long = "quota-check-interval", default_value_t = 10)]
+    quota_check_interval: u64,
 
     /// Use EC-SRP5 authentication
     #[arg(long = "ecsrp5")]
