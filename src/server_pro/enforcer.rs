@@ -342,4 +342,70 @@ mod tests {
         let (ip_in, ip_out) = db.get_ip_daily_usage("127.0.0.1").unwrap();
         assert!(ip_in + ip_out > 0, "IP usage should be recorded");
     }
+
+    #[test]
+    fn test_remaining_budget_calculation() {
+        let (db, qm) = setup_test_db();
+        let ip: IpAddr = "10.0.0.1".parse().unwrap();
+
+        // No usage yet: budget = min(daily=1000, weekly=5000, monthly=10000, ip_daily=500, ...)
+        // IP daily combined = 500 is the smallest
+        let budget = qm.remaining_budget("testuser", &ip);
+        assert_eq!(budget, 500, "budget should be min of all limits (ip_daily=500)");
+
+        // Use record_usage which properly records combined + directional
+        // inbound=200, outbound=200 → combined = 400
+        qm.record_usage("testuser", "10.0.0.1", 200, 200);
+
+        // IP daily combined: 500 - 400 = 100 remaining
+        // IP daily inbound: 500 - 200 = 300 remaining
+        // IP daily outbound: 500 - 200 = 300 remaining
+        // User daily: 1000 - 400 = 600 remaining
+        let budget = qm.remaining_budget("testuser", &ip);
+        assert_eq!(budget, 100, "budget should reflect IP combined remaining (100)");
+    }
+
+    #[test]
+    fn test_budget_zero_when_exhausted() {
+        let (db, qm) = setup_test_db();
+        let ip: IpAddr = "10.0.0.2".parse().unwrap();
+
+        // Exhaust user daily quota (1000 bytes)
+        db.record_usage("testuser", 600, 500).unwrap(); // 1100 > 1000
+
+        let budget = qm.remaining_budget("testuser", &ip);
+        assert_eq!(budget, 0, "budget should be 0 when user daily quota is exhausted");
+    }
+
+    #[test]
+    fn test_byte_budget_stops_transfer() {
+        let state = BandwidthState::new();
+
+        // Set a 1000-byte budget
+        state.set_budget(1000);
+
+        // Spend 500 bytes — should succeed
+        assert!(state.spend_budget(500));
+
+        // Spend another 400 — should succeed (100 remaining)
+        assert!(state.spend_budget(400));
+
+        // Spend 200 — should fail (only 100 remaining)
+        assert!(!state.spend_budget(200));
+
+        // running should be false
+        assert!(!state.running.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn test_unlimited_budget_always_succeeds() {
+        let state = BandwidthState::new();
+        // Default budget is u64::MAX (unlimited)
+
+        // Should always succeed
+        for _ in 0..1000 {
+            assert!(state.spend_budget(1_000_000_000));
+        }
+        assert!(state.running.load(Ordering::Relaxed));
+    }
 }

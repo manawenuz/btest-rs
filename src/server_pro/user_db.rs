@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone)]
 pub struct UserDb {
     conn: Arc<Mutex<Connection>>,
+    path: Arc<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -68,7 +69,13 @@ impl UserDb {
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
+            path: Arc::new(path.to_string()),
         })
+    }
+
+    /// Return the database file path.
+    pub fn path(&self) -> &str {
+        &self.path
     }
 
     pub fn ensure_tables(&self) -> anyhow::Result<()> {
@@ -147,11 +154,24 @@ impl UserDb {
     pub fn add_user(&self, username: &str, password: &str) -> anyhow::Result<()> {
         let hash = hash_password(username, password);
         let conn = self.conn.lock().unwrap();
+        // Ensure password_raw column exists (migration for older databases)
+        let _ = conn.execute("ALTER TABLE users ADD COLUMN password_raw TEXT DEFAULT ''", []);
         conn.execute(
-            "INSERT OR REPLACE INTO users (username, password_hash) VALUES (?1, ?2)",
-            params![username, hash],
+            "INSERT OR REPLACE INTO users (username, password_hash, password_raw) VALUES (?1, ?2, ?3)",
+            params![username, hash, password],
         )?;
         Ok(())
+    }
+
+    /// Get the raw password for MD5 challenge-response auth.
+    pub fn get_password(&self, username: &str) -> anyhow::Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        let result = conn.query_row(
+            "SELECT password_raw FROM users WHERE username = ?1 AND enabled = 1",
+            params![username],
+            |row| row.get::<_, String>(0),
+        ).optional()?;
+        Ok(result)
     }
 
     pub fn get_user(&self, username: &str) -> anyhow::Result<Option<User>> {

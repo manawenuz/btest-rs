@@ -371,18 +371,92 @@ impl QuotaManager {
             tracing::error!("Failed to record user usage for {}: {}", username, e);
         }
 
-        // Record combined IP usage.
+        // Record IP usage — record_ip_usage already writes both the
+        // inbound_bytes and outbound_bytes columns in one operation.
+        // Do NOT also call record_ip_inbound_usage/record_ip_outbound_usage
+        // as they update the same columns and would double-count.
         if let Err(e) = self.db.record_ip_usage(ip, outbound_bytes, inbound_bytes) {
             tracing::error!("Failed to record IP usage for {}: {}", ip, e);
         }
+    }
 
-        // Record directional IP usage for the new per-direction columns.
-        if let Err(e) = self.db.record_ip_inbound_usage(ip, inbound_bytes) {
-            tracing::error!("Failed to record IP inbound usage for {}: {}", ip, e);
+    /// Calculate the remaining byte budget for a user+IP combination.
+    /// Returns the minimum remaining quota across all applicable limits.
+    /// Used to set `BandwidthState::byte_budget` before a test starts,
+    /// preventing overshoot beyond quota boundaries.
+    pub fn remaining_budget(&self, username: &str, ip: &IpAddr) -> u64 {
+        let mut budget = u64::MAX;
+        let ip_str = ip.to_string();
+
+        // Helper: min that ignores 0 (unlimited)
+        let cap = |budget: &mut u64, limit: u64, used: u64| {
+            if limit > 0 {
+                let remaining = limit.saturating_sub(used);
+                *budget = (*budget).min(remaining);
+            }
+        };
+
+        // User quotas (combined tx+rx)
+        if let Ok(Some(user)) = self.db.get_user(username) {
+            let daily_limit = if user.daily_quota > 0 { user.daily_quota as u64 } else { self.default_daily };
+            if daily_limit > 0 {
+                let (tx, rx) = self.db.get_daily_usage(username).unwrap_or((0, 0));
+                cap(&mut budget, daily_limit, tx + rx);
+            }
+
+            let weekly_limit = if user.weekly_quota > 0 { user.weekly_quota as u64 } else { self.default_weekly };
+            if weekly_limit > 0 {
+                let (tx, rx) = self.db.get_weekly_usage(username).unwrap_or((0, 0));
+                cap(&mut budget, weekly_limit, tx + rx);
+            }
+
+            if self.default_monthly > 0 {
+                let (tx, rx) = self.db.get_monthly_usage(username).unwrap_or((0, 0));
+                cap(&mut budget, self.default_monthly, tx + rx);
+            }
         }
-        if let Err(e) = self.db.record_ip_outbound_usage(ip, outbound_bytes) {
-            tracing::error!("Failed to record IP outbound usage for {}: {}", ip, e);
+
+        // IP combined quotas
+        if self.ip_daily > 0 {
+            let (tx, rx) = self.db.get_ip_daily_usage(&ip_str).unwrap_or((0, 0));
+            cap(&mut budget, self.ip_daily, tx + rx);
         }
+        if self.ip_weekly > 0 {
+            let (tx, rx) = self.db.get_ip_weekly_usage(&ip_str).unwrap_or((0, 0));
+            cap(&mut budget, self.ip_weekly, tx + rx);
+        }
+        if self.ip_monthly > 0 {
+            let (tx, rx) = self.db.get_ip_monthly_usage(&ip_str).unwrap_or((0, 0));
+            cap(&mut budget, self.ip_monthly, tx + rx);
+        }
+
+        // IP directional quotas — use inbound + outbound as combined ceiling
+        if self.ip_daily_inbound > 0 {
+            let used = self.db.get_ip_daily_inbound(&ip_str).unwrap_or(0);
+            cap(&mut budget, self.ip_daily_inbound, used);
+        }
+        if self.ip_daily_outbound > 0 {
+            let used = self.db.get_ip_daily_outbound(&ip_str).unwrap_or(0);
+            cap(&mut budget, self.ip_daily_outbound, used);
+        }
+        if self.ip_weekly_inbound > 0 {
+            let used = self.db.get_ip_weekly_inbound(&ip_str).unwrap_or(0);
+            cap(&mut budget, self.ip_weekly_inbound, used);
+        }
+        if self.ip_weekly_outbound > 0 {
+            let used = self.db.get_ip_weekly_outbound(&ip_str).unwrap_or(0);
+            cap(&mut budget, self.ip_weekly_outbound, used);
+        }
+        if self.ip_monthly_inbound > 0 {
+            let used = self.db.get_ip_monthly_inbound(&ip_str).unwrap_or(0);
+            cap(&mut budget, self.ip_monthly_inbound, used);
+        }
+        if self.ip_monthly_outbound > 0 {
+            let used = self.db.get_ip_monthly_outbound(&ip_str).unwrap_or(0);
+            cap(&mut budget, self.ip_monthly_outbound, used);
+        }
+
+        budget
     }
 
     pub fn max_duration(&self) -> u64 {

@@ -366,6 +366,24 @@ async fn handle_client(
 
 // --- TCP Test Server ---
 
+/// Public TX task for multi-connection use by server_pro.
+pub async fn tcp_tx_task(
+    writer: tokio::net::tcp::OwnedWriteHalf,
+    tx_size: usize,
+    tx_speed: u32,
+    state: Arc<BandwidthState>,
+) {
+    tcp_tx_loop(writer, tx_size, tx_speed, state).await;
+}
+
+/// Public RX task for multi-connection use by server_pro.
+pub async fn tcp_rx_task(
+    reader: tokio::net::tcp::OwnedReadHalf,
+    state: Arc<BandwidthState>,
+) {
+    tcp_rx_loop(reader, state).await;
+}
+
 /// Run a TCP bandwidth test on an already-authenticated stream.
 /// Public API for use by server_pro.
 pub async fn run_tcp_test(
@@ -451,9 +469,22 @@ async fn run_tcp_test_inner(stream: TcpStream, cmd: Command, state: Arc<Bandwidt
     Ok(state.summary())
 }
 
+/// Public API for multi-connection TCP test with external state. Used by server_pro.
+pub async fn run_tcp_multiconn_test(
+    streams: Vec<TcpStream>,
+    cmd: Command,
+    state: Arc<BandwidthState>,
+) -> Result<(u64, u64, u64, u32)> {
+    run_tcp_multiconn_inner(streams, cmd, state).await
+}
+
 /// TCP multi-connection.
 async fn run_tcp_multiconn_server(streams: Vec<TcpStream>, cmd: Command) -> Result<(u64, u64, u64, u32)> {
     let state = BandwidthState::new();
+    run_tcp_multiconn_inner(streams, cmd, state).await
+}
+
+async fn run_tcp_multiconn_inner(streams: Vec<TcpStream>, cmd: Command, state: Arc<BandwidthState>) -> Result<(u64, u64, u64, u32)> {
     let tx_size = cmd.tx_size as usize;
     let server_should_tx = cmd.server_tx();
     let server_should_rx = cmd.server_rx();
@@ -564,6 +595,9 @@ async fn tcp_tx_loop_inner(
             next_status = Instant::now() + Duration::from_secs(1);
         }
 
+        if !state.spend_budget(tx_size as u64) {
+            break;
+        }
         if writer.write_all(&packet).await.is_err() {
             state.running.store(false, Ordering::SeqCst);
             break;
@@ -600,6 +634,9 @@ async fn tcp_rx_loop(mut reader: tokio::net::tcp::OwnedReadHalf, state: Arc<Band
                 break;
             }
             Ok(n) => {
+                if !state.spend_budget(n as u64) {
+                    break;
+                }
                 state.rx_bytes.fetch_add(n as u64, Ordering::Relaxed);
             }
         }
@@ -796,6 +833,10 @@ async fn udp_tx_loop(
     let mut consecutive_errors: u32 = 0;
 
     while state.running.load(Ordering::Relaxed) {
+        if !state.spend_budget(tx_size as u64) {
+            break;
+        }
+
         packet[0..4].copy_from_slice(&seq.to_be_bytes());
 
         let result = if multi_conn {
@@ -871,6 +912,9 @@ async fn udp_rx_loop(socket: &UdpSocket, state: Arc<BandwidthState>) {
         // (multi-connection MikroTik sends from multiple ports)
         match tokio::time::timeout(Duration::from_secs(5), socket.recv_from(&mut buf)).await {
             Ok(Ok((n, _src))) if n >= 4 => {
+                if !state.spend_budget(n as u64) {
+                    break;
+                }
                 state.rx_bytes.fetch_add(n as u64, Ordering::Relaxed);
                 state.rx_packets.fetch_add(1, Ordering::Relaxed);
 

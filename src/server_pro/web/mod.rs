@@ -76,7 +76,7 @@ const DEFAULT_DB_PATH: &str = "btest-users.db";
 /// the web module is optional and failure during startup should surface
 /// loudly rather than silently serving broken pages.
 pub fn create_router(db: UserDb) -> Router {
-    let db_path = std::env::var("BTEST_DB_PATH").unwrap_or_else(|_| DEFAULT_DB_PATH.to_string());
+    let db_path = db.path().to_string();
 
     let query_conn = Connection::open_with_flags(
         &db_path,
@@ -104,6 +104,8 @@ pub fn create_router(db: UserDb) -> Router {
         .route("/dashboard/{ip}", get(dashboard_page))
         .route("/api/ip/{ip}/sessions", get(api_sessions))
         .route("/api/ip/{ip}/stats", get(api_stats))
+        .route("/api/ip/{ip}/export", get(api_export))
+        .route("/api/ip/{ip}/quota", get(api_quota))
         .route("/api/session/{id}/intervals", get(api_intervals))
         .with_state(state)
 }
@@ -142,47 +144,87 @@ fn ensure_web_tables(db_path: &str) -> anyhow::Result<()> {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>btest-rs Public Bandwidth Test Server</title>
+<title>btest-rs — Free Public Bandwidth Test Server</title>
 <style>
   *{margin:0;padding:0;box-sizing:border-box}
-  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:#0f1117;color:#e1e4e8;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center}
-  .container{max-width:560px;width:90%;text-align:center;padding:2rem}
-  h1{font-size:2rem;margin-bottom:.5rem;color:#58a6ff}
-  .subtitle{color:#8b949e;margin-bottom:2rem;line-height:1.5}
-  .search-box{display:flex;gap:.5rem;margin-bottom:1.5rem}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:#0f1117;color:#e1e4e8;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:2rem 1rem}
+  .container{max-width:720px;width:100%;padding:1rem 0}
+  h1{font-size:2.2rem;margin-bottom:.25rem;color:#58a6ff;text-align:center}
+  .subtitle{color:#8b949e;margin-bottom:2.5rem;line-height:1.6;text-align:center;font-size:1.05rem}
+  .section{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:1.5rem;margin-bottom:1.5rem;text-align:left;line-height:1.7;color:#c9d1d9}
+  .section h2{color:#e1e4e8;font-size:1.15rem;margin-bottom:.75rem}
+  .section h3{color:#e1e4e8;font-size:1rem;margin-bottom:.5rem;margin-top:1rem}
+  .section h3:first-child{margin-top:0}
+  .section p{margin-bottom:.5rem}
+  .section ul{margin:.5rem 0 .5rem 1.5rem;color:#8b949e}
+  .section li{margin-bottom:.35rem}
+  code{background:#0d1117;padding:.2rem .5rem;border-radius:4px;font-size:.85em;color:#58a6ff;word-break:break-all}
+  pre{background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:1rem;overflow-x:auto;margin:.75rem 0;line-height:1.5}
+  pre code{padding:0;background:none;font-size:.85em}
+  .label-tag{display:inline-block;padding:.15rem .5rem;border-radius:4px;font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.03em;margin-right:.5rem;vertical-align:middle}
+  .tag-tcp{background:rgba(63,185,80,0.15);color:#3fb950}
+  .tag-udp{background:rgba(210,153,34,0.15);color:#d29922}
+  .note{background:#1c1e26;border-left:3px solid #d29922;padding:.75rem 1rem;border-radius:0 6px 6px 0;margin:.75rem 0;font-size:.92rem;color:#8b949e}
+  .note strong{color:#d29922}
+  .search-section{text-align:center}
+  .search-section h2{text-align:center}
+  .search-box{display:flex;gap:.5rem;margin-bottom:1rem}
   .search-box input{flex:1;padding:.75rem 1rem;border:1px solid #30363d;border-radius:6px;background:#161b22;color:#e1e4e8;font-size:1rem;outline:none}
   .search-box input:focus{border-color:#58a6ff}
   .search-box input::placeholder{color:#484f58}
   .search-box button{padding:.75rem 1.5rem;background:#238636;color:#fff;border:none;border-radius:6px;font-size:1rem;cursor:pointer;white-space:nowrap}
   .search-box button:hover{background:#2ea043}
-  .info{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:1.5rem;text-align:left;line-height:1.6;color:#8b949e}
-  .info h3{color:#e1e4e8;margin-bottom:.5rem}
-  .info code{background:#0d1117;padding:.15rem .4rem;border-radius:4px;font-size:.9em;color:#58a6ff}
-  .auto-link{margin-top:1rem;font-size:.9rem}
+  .auto-link{font-size:.9rem;color:#8b949e}
   .auto-link a{color:#58a6ff;text-decoration:none}
   .auto-link a:hover{text-decoration:underline}
-  .footer{margin-top:2rem;color:#484f58;font-size:.8rem}
+  .footer{margin-top:2rem;color:#484f58;font-size:.8rem;text-align:center}
+  .footer a{color:#58a6ff;text-decoration:none}
+  .footer a:hover{text-decoration:underline}
 </style>
 </head>
 <body>
 <div class="container">
   <h1>btest-rs</h1>
-  <p class="subtitle">Public MikroTik Bandwidth Test Server &mdash; view your test results and history.</p>
-  <form class="search-box" id="ip-form" onsubmit="return goToDashboard()">
-    <input type="text" id="ip-input" placeholder="Enter your IP address (e.g. 203.0.113.5)" autocomplete="off">
-    <button type="submit">View Results</button>
-  </form>
-  <div class="auto-link" id="auto-detect">Detecting your IP...</div>
-  <div class="info">
-    <h3>How it works</h3>
-    <p>Run a bandwidth test from your MikroTik router targeting this server.
-       After the test completes, enter your public IP above to see
-       throughput charts, session history, and aggregate statistics.</p>
-    <p style="margin-top:0.5rem">
-      Example: <code>/tool bandwidth-test address=this-server protocol=tcp direction=both</code>
-    </p>
+  <p class="subtitle">Free public MikroTik-compatible bandwidth test server.<br>Test your link speed from any RouterOS device &mdash; no registration required.</p>
+
+  <div class="section">
+    <h2>Quick Start</h2>
+    <p>Open a terminal on your MikroTik router and run one of the following commands:</p>
+    <h3><span class="label-tag tag-tcp">TCP</span> Recommended</h3>
+    <pre><code>/tool bandwidth-test address=104.225.217.60 user=btest password=btest protocol=tcp direction=both</code></pre>
+    <h3><span class="label-tag tag-udp">UDP</span></h3>
+    <pre><code>/tool bandwidth-test address=104.225.217.60 user=btest password=btest protocol=udp direction=both</code></pre>
   </div>
-  <div class="footer">Powered by btest-rs</div>
+
+  <div class="section">
+    <h2>Important Notes</h2>
+    <ul>
+      <li><strong style="color:#e1e4e8">Credentials:</strong> <code>user=btest</code> <code>password=btest</code></li>
+      <li><strong style="color:#e1e4e8">TCP is recommended</strong> for remote testing &mdash; it works reliably through any NAT or firewall</li>
+      <li><strong style="color:#e1e4e8">Per-IP daily quotas</strong> apply to keep the service fair for everyone</li>
+      <li><strong style="color:#e1e4e8">Maximum test duration:</strong> 120 seconds</li>
+      <li><strong style="color:#e1e4e8">Connection limit:</strong> 3 concurrent tests per IP</li>
+    </ul>
+    <div class="note">
+      <strong>UDP bidirectional may not work through NAT/firewall.</strong>
+      UDP <code>direction=both</code> requires the server to send packets to a pre-calculated client port, which NAT routers typically block. If you need UDP testing:<br>
+      &bull; Forward UDP ports 2001&ndash;2100 on your router, or<br>
+      &bull; Use <code>direction=send</code> or <code>direction=receive</code> (one-way works fine), or<br>
+      &bull; Test from a device with a public IP
+    </div>
+  </div>
+
+  <div class="section search-section">
+    <h2>Check Your Results</h2>
+    <p style="margin-bottom:1rem;color:#8b949e">After running a test, enter your public IP to view throughput charts, session history, and statistics.</p>
+    <form class="search-box" id="ip-form" onsubmit="return goToDashboard()">
+      <input type="text" id="ip-input" placeholder="Enter your IP address (e.g. 203.0.113.5)" autocomplete="off">
+      <button type="submit">View Results</button>
+    </form>
+    <div class="auto-link" id="auto-detect">Detecting your IP...</div>
+  </div>
+
+  <div class="footer">Powered by <a href="https://github.com/manawenuz/btest-rs">btest-rs</a> &mdash; open source MikroTik bandwidth test server</div>
 </div>
 <script>
 function goToDashboard(){var ip=document.getElementById('ip-input').value.trim();if(ip){window.location.href='/dashboard/'+encodeURIComponent(ip);}return false;}
@@ -214,6 +256,8 @@ struct IndexTemplate;
   .header h1{font-size:1.5rem;color:#58a6ff}
   .header .ip-label{font-size:1.1rem;color:#8b949e;font-family:monospace}
   .header .home-link{margin-left:auto}
+  .btn{display:inline-block;padding:.5rem 1rem;border-radius:6px;font-size:.85rem;font-weight:500;cursor:pointer;border:1px solid #30363d;text-decoration:none}
+  .btn-json{background:#161b22;color:#3fb950}.btn-json:hover{background:#1c2128;text-decoration:none}
   .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1rem;margin-bottom:1.5rem}
   .stat-card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:1rem}
   .stat-card .label{color:#8b949e;font-size:.8rem;text-transform:uppercase;letter-spacing:.05em}
@@ -231,12 +275,22 @@ struct IndexTemplate;
   .chart-placeholder{text-align:center;color:#484f58;padding:3rem 0}
   .footer{text-align:center;color:#484f58;font-size:.8rem;margin-top:2rem}
   .no-data{text-align:center;padding:3rem;color:#484f58}
+  .quota-section{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:1.25rem;margin-bottom:1.5rem}
+  .quota-section h2{font-size:1rem;color:#8b949e;margin-bottom:1rem}
+  .quota-row{display:flex;align-items:center;gap:1rem;margin-bottom:.75rem}
+  .quota-row:last-child{margin-bottom:0}
+  .quota-label{min-width:70px;font-size:.85rem;color:#8b949e;text-transform:uppercase;letter-spacing:.04em}
+  .quota-bar-wrap{flex:1;background:#21262d;border-radius:4px;height:22px;position:relative;overflow:hidden}
+  .quota-bar{height:100%;border-radius:4px;transition:width .5s ease}
+  .quota-bar.low{background:#238636}.quota-bar.mid{background:#d29922}.quota-bar.high{background:#da3633}
+  .quota-text{min-width:180px;font-size:.85rem;color:#e1e4e8;text-align:right;font-family:monospace}
 </style>
 </head>
 <body>
 <div class="header">
   <h1>btest-rs</h1>
   <span class="ip-label">{{ ip }}</span>
+  <a class="btn btn-json" href="/api/ip/{{ ip }}/export" download>Export JSON</a>
   <span class="home-link"><a href="/">Home</a></span>
 </div>
 <div class="stats" id="stats-grid">
@@ -245,6 +299,12 @@ struct IndexTemplate;
   <div class="stat-card"><div class="label">Total RX</div><div class="value" id="stat-total-rx">&mdash;</div></div>
   <div class="stat-card"><div class="label">Avg TX Mbps</div><div class="value" id="stat-avg-tx">&mdash;</div></div>
   <div class="stat-card"><div class="label">Avg RX Mbps</div><div class="value" id="stat-avg-rx">&mdash;</div></div>
+</div>
+<div class="quota-section" id="quota-section">
+  <h2>Quota Usage</h2>
+  <div class="quota-row"><span class="quota-label">Daily</span><div class="quota-bar-wrap"><div class="quota-bar low" id="bar-daily" style="width:0%"></div></div><span class="quota-text" id="text-daily">&mdash;</span></div>
+  <div class="quota-row"><span class="quota-label">Weekly</span><div class="quota-bar-wrap"><div class="quota-bar low" id="bar-weekly" style="width:0%"></div></div><span class="quota-text" id="text-weekly">&mdash;</span></div>
+  <div class="quota-row"><span class="quota-label">Monthly</span><div class="quota-bar-wrap"><div class="quota-bar low" id="bar-monthly" style="width:0%"></div></div><span class="quota-text" id="text-monthly">&mdash;</span></div>
 </div>
 <div class="chart-section">
   <h2 id="chart-title">Select a test below to view its throughput chart</h2>
@@ -266,6 +326,19 @@ var currentIp="{{ ip }}";
 var throughputChart=null;
 function formatBytes(b){if(b===0)return'0 B';var u=['B','KB','MB','GB','TB'];var i=Math.floor(Math.log(b)/Math.log(1024));if(i>=u.length)i=u.length-1;return(b/Math.pow(1024,i)).toFixed(1)+' '+u[i];}
 function formatMbps(bps){return(bps*8/1e6).toFixed(2);}
+fetch('/api/ip/'+encodeURIComponent(currentIp)+'/quota').then(function(r){return r.json();}).then(function(q){
+  function upd(id,used,limit){
+    var pct=limit>0?Math.min(used/limit*100,100):0;
+    var bar=document.getElementById('bar-'+id);
+    var txt=document.getElementById('text-'+id);
+    bar.style.width=pct.toFixed(1)+'%';
+    bar.className='quota-bar '+(pct<50?'low':pct<80?'mid':'high');
+    txt.textContent=formatBytes(used)+' / '+formatBytes(limit)+' ('+pct.toFixed(1)+'%)';
+  }
+  upd('daily',q.daily_used,q.daily_limit);
+  upd('weekly',q.weekly_used,q.weekly_limit);
+  upd('monthly',q.monthly_used,q.monthly_limit);
+}).catch(function(){});
 function durationStr(s,e){if(!s||!e)return'--';var ms=new Date(e)-new Date(s);if(ms<0)return'--';var sec=Math.round(ms/1000);if(sec<60)return sec+'s';return Math.floor(sec/60)+'m '+(sec%60)+'s';}
 function durationSec(s,e){if(!s||!e)return 0;return Math.max((new Date(e)-new Date(s))/1000,0.001);}
 fetch('/api/ip/'+encodeURIComponent(currentIp)+'/stats').then(function(r){return r.json();}).then(function(d){
@@ -493,6 +566,198 @@ async fn api_stats(
     };
 
     Ok(axum::Json(stats))
+}
+
+/// Quota usage for an IP — daily/weekly/monthly with limits.
+#[derive(Serialize)]
+struct QuotaUsageJson {
+    daily_used: i64,
+    daily_limit: i64,
+    weekly_used: i64,
+    weekly_limit: i64,
+    monthly_used: i64,
+    monthly_limit: i64,
+}
+
+/// `GET /api/ip/{ip}/quota` -- return current quota usage for the IP.
+async fn api_quota(
+    State(state): State<Arc<WebState>>,
+    Path(ip): Path<String>,
+) -> Result<axum::Json<QuotaUsageJson>, AppError> {
+    let conn = state.query_conn.lock().map_err(|e| anyhow::anyhow!("lock: {}", e))?;
+
+    let daily: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(inbound_bytes + outbound_bytes), 0) FROM ip_usage WHERE ip = ?1 AND date = date('now')",
+        params![ip], |row| row.get(0),
+    ).unwrap_or(0);
+
+    let weekly: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(inbound_bytes + outbound_bytes), 0) FROM ip_usage WHERE ip = ?1 AND date >= date('now', '-7 days')",
+        params![ip], |row| row.get(0),
+    ).unwrap_or(0);
+
+    let monthly: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(inbound_bytes + outbound_bytes), 0) FROM ip_usage WHERE ip = ?1 AND date >= date('now', '-30 days')",
+        params![ip], |row| row.get(0),
+    ).unwrap_or(0);
+
+    // Limits: 2GB daily, 8GB weekly, 24GB monthly
+    Ok(axum::Json(QuotaUsageJson {
+        daily_used: daily,
+        daily_limit: 2_147_483_648,
+        weekly_used: weekly,
+        weekly_limit: 8_589_934_592,
+        monthly_used: monthly,
+        monthly_limit: 25_769_803_776,
+    }))
+}
+
+/// Full export of all data for an IP — stats + sessions with human-readable fields.
+#[derive(Serialize)]
+struct ExportJson {
+    ip: String,
+    exported_at: String,
+    stats: StatsJson,
+    quota: QuotaJson,
+    sessions: Vec<ExportSessionJson>,
+}
+
+#[derive(Serialize)]
+struct QuotaJson {
+    daily_used_bytes: i64,
+    daily_used_human: String,
+    daily_limit_bytes: String,
+}
+
+#[derive(Serialize)]
+struct ExportSessionJson {
+    id: i64,
+    started_at: Option<String>,
+    ended_at: Option<String>,
+    protocol: Option<String>,
+    direction: Option<String>,
+    tx_bytes: i64,
+    rx_bytes: i64,
+    tx_human: String,
+    rx_human: String,
+    duration_secs: f64,
+    avg_tx_mbps: f64,
+    avg_rx_mbps: f64,
+}
+
+fn human_bytes(b: i64) -> String {
+    let b = b as f64;
+    if b >= 1_073_741_824.0 {
+        format!("{:.2} GB", b / 1_073_741_824.0)
+    } else if b >= 1_048_576.0 {
+        format!("{:.1} MB", b / 1_048_576.0)
+    } else if b >= 1024.0 {
+        format!("{:.1} KB", b / 1024.0)
+    } else {
+        format!("{} B", b as i64)
+    }
+}
+
+/// `GET /api/ip/{ip}/export` -- return a comprehensive JSON export of all
+/// sessions, stats, and quota usage for an IP. Suitable for download/archival.
+async fn api_export(
+    State(state): State<Arc<WebState>>,
+    Path(ip): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    let conn = state
+        .query_conn
+        .lock()
+        .map_err(|e| anyhow::anyhow!("lock: {}", e))?;
+
+    // Stats
+    let stats = conn.query_row(
+        "SELECT COUNT(*), COALESCE(SUM(tx_bytes),0), COALESCE(SUM(rx_bytes),0),
+                COALESCE(SUM(CASE WHEN ended_at IS NOT NULL AND started_at IS NOT NULL
+                    THEN (julianday(ended_at)-julianday(started_at))*86400.0 ELSE 0 END),0)
+         FROM sessions WHERE peer_ip = ?1",
+        params![ip],
+        |row| {
+            let n: i64 = row.get(0)?;
+            let tx: i64 = row.get(1)?;
+            let rx: i64 = row.get(2)?;
+            let secs: f64 = row.get(3)?;
+            Ok(StatsJson {
+                total_sessions: n,
+                total_tx_bytes: tx,
+                total_rx_bytes: rx,
+                avg_tx_mbps: if secs > 0.0 { tx as f64 * 8.0 / secs / 1e6 } else { 0.0 },
+                avg_rx_mbps: if secs > 0.0 { rx as f64 * 8.0 / secs / 1e6 } else { 0.0 },
+            })
+        },
+    )?;
+
+    // Quota
+    let daily_used: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(inbound_bytes + outbound_bytes), 0) FROM ip_usage
+         WHERE ip = ?1 AND date = date('now')",
+        params![ip],
+        |row| row.get(0),
+    ).unwrap_or(0);
+
+    let quota = QuotaJson {
+        daily_used_bytes: daily_used,
+        daily_used_human: human_bytes(daily_used),
+        daily_limit_bytes: "see server config".to_string(),
+    };
+
+    // Sessions with computed fields (duration computed by SQLite)
+    let mut stmt = conn.prepare(
+        "SELECT id, started_at, ended_at, protocol, direction, tx_bytes, rx_bytes,
+                CASE WHEN ended_at IS NOT NULL AND started_at IS NOT NULL
+                     THEN (julianday(ended_at) - julianday(started_at)) * 86400.0
+                     ELSE 0 END AS dur_secs
+         FROM sessions WHERE peer_ip = ?1 ORDER BY started_at DESC LIMIT 100",
+    )?;
+    let sessions: Vec<ExportSessionJson> = stmt.query_map(params![ip], |row| {
+        let tx: i64 = row.get(5)?;
+        let rx: i64 = row.get(6)?;
+        let dur: f64 = row.get(7)?;
+        Ok(ExportSessionJson {
+            id: row.get(0)?,
+            started_at: row.get(1)?,
+            ended_at: row.get(2)?,
+            protocol: row.get(3)?,
+            direction: row.get(4)?,
+            tx_bytes: tx,
+            rx_bytes: rx,
+            tx_human: human_bytes(tx),
+            rx_human: human_bytes(rx),
+            duration_secs: dur,
+            avg_tx_mbps: if dur > 0.0 { tx as f64 * 8.0 / dur / 1e6 } else { 0.0 },
+            avg_rx_mbps: if dur > 0.0 { rx as f64 * 8.0 / dur / 1e6 } else { 0.0 },
+        })
+    })?.filter_map(Result::ok).collect();
+
+    let export = ExportJson {
+        ip: ip.clone(),
+        exported_at: {
+            // Simple UTC timestamp without chrono
+            use std::time::{SystemTime, UNIX_EPOCH};
+            let secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+            format!("{}", secs) // Unix timestamp — universally parseable
+        },
+        stats,
+        quota,
+        sessions,
+    };
+
+    let json_string = serde_json::to_string_pretty(&export)
+        .map_err(|e| anyhow::anyhow!("json serialize: {}", e))?;
+
+    Ok((
+        StatusCode::OK,
+        [
+            (axum::http::header::CONTENT_TYPE, "application/json".to_string()),
+            (axum::http::header::CONTENT_DISPOSITION,
+             format!("attachment; filename=\"btest-{}.json\"", ip)),
+        ],
+        json_string,
+    ))
 }
 
 /// `GET /api/session/{id}/intervals` -- return per-second throughput data

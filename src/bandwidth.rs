@@ -20,6 +20,9 @@ pub struct BandwidthState {
     pub intervals: AtomicU32,
     /// Remote peer's CPU usage (received via status messages)
     pub remote_cpu: AtomicU8,
+    /// Remaining byte budget (TX + RX combined). When this reaches 0 the test
+    /// stops immediately. u64::MAX means unlimited (default for non-pro server).
+    pub byte_budget: AtomicU64,
 }
 
 impl BandwidthState {
@@ -38,6 +41,7 @@ impl BandwidthState {
             total_lost_packets: AtomicU64::new(0),
             intervals: AtomicU32::new(0),
             remote_cpu: AtomicU8::new(0),
+            byte_budget: AtomicU64::new(u64::MAX),
         })
     }
 
@@ -48,6 +52,29 @@ impl BandwidthState {
         self.total_rx_bytes.fetch_add(rx, Relaxed);
         self.total_lost_packets.fetch_add(lost, Relaxed);
         self.intervals.fetch_add(1, Relaxed);
+    }
+
+    /// Try to spend `amount` bytes from the budget. Returns `true` if allowed,
+    /// `false` if the budget is exhausted (and sets `running = false`).
+    #[inline]
+    pub fn spend_budget(&self, amount: u64) -> bool {
+        use std::sync::atomic::Ordering::{Relaxed, SeqCst};
+        // Fast path: unlimited budget (non-pro server)
+        let current = self.byte_budget.load(Relaxed);
+        if current == u64::MAX {
+            return true;
+        }
+        if current < amount {
+            self.running.store(false, SeqCst);
+            return false;
+        }
+        self.byte_budget.fetch_sub(amount, Relaxed);
+        true
+    }
+
+    /// Set the byte budget (total bytes allowed for the entire test).
+    pub fn set_budget(&self, budget: u64) {
+        self.byte_budget.store(budget, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Get summary for syslog reporting.
