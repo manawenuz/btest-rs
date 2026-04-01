@@ -14,7 +14,7 @@ jobs:
       - name: Install dependencies
         run: |
           apt-get update && apt-get install -y --no-install-recommends \
-            git curl jq ca-certificates zip \
+            git curl jq ca-certificates zip unzip \
             musl-tools \
             gcc-aarch64-linux-gnu \
             gcc-arm-linux-gnueabihf \
@@ -23,7 +23,14 @@ jobs:
             x86_64-unknown-linux-musl \
             aarch64-unknown-linux-musl \
             armv7-unknown-linux-musleabihf \
-            x86_64-pc-windows-gnu
+            x86_64-pc-windows-gnu \
+            aarch64-linux-android \
+            armv7-linux-androideabi
+          # Install Android NDK for cross-compilation
+          NDK_VER=r27c
+          curl -sL https://dl.google.com/android/repository/android-ndk-${NDK_VER}-linux.zip -o /tmp/ndk.zip
+          unzip -q /tmp/ndk.zip -d /opt && rm /tmp/ndk.zip
+          export ANDROID_NDK_HOME=/opt/android-ndk-${NDK_VER}
 
       - name: Ensure code is present
         run: |
@@ -47,6 +54,12 @@ jobs:
 
           [target.x86_64-pc-windows-gnu]
           linker = "x86_64-w64-mingw32-gcc"
+
+          [target.aarch64-linux-android]
+          linker = "/opt/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android35-clang"
+
+          [target.armv7-linux-androideabi]
+          linker = "/opt/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi35-clang"
           TOML
 
       - name: Build Linux x86_64
@@ -60,6 +73,12 @@ jobs:
 
       - name: Build Windows x86_64
         run: cargo build --release --target x86_64-pc-windows-gnu
+
+      - name: Build Android aarch64 (ARMv8)
+        run: cargo build --release --target aarch64-linux-android
+
+      - name: Build Android armv7 (ARMv7)
+        run: cargo build --release --target armv7-linux-androideabi
 
       - name: Package all
         run: |
@@ -79,6 +98,14 @@ jobs:
 
           cd target/x86_64-pc-windows-gnu/release
           zip /artifacts/btest-windows-x86_64.zip btest.exe
+          cd -
+
+          cd target/aarch64-linux-android/release
+          tar czf /artifacts/btest-android-aarch64.tar.gz btest
+          cd -
+
+          cd target/armv7-linux-androideabi/release
+          tar czf /artifacts/btest-android-armv7.tar.gz btest
           cd -
 
           cd /artifacts
@@ -103,6 +130,8 @@ jobs:
           | Linux | aarch64 (RPi 64-bit) | btest-linux-aarch64.tar.gz |
           | Linux | armv7 (RPi 32-bit) | btest-linux-armv7.tar.gz |
           | Windows | x86_64 | btest-windows-x86_64.zip |
+          | Android | aarch64 (ARMv8, Termux) | btest-android-aarch64.tar.gz |
+          | Android | armv7 (ARMv7, Termux) | btest-android-armv7.tar.gz |
           | macOS | aarch64 / x86_64 | Run \`scripts/build-macos-release.sh --upload ${TAG}\` |
           | Docker | x86_64 | \`docker pull ${REGISTRY}/manawenuz/btest-rs:${TAG}\` |
 
