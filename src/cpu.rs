@@ -97,6 +97,7 @@ fn get_cpu_times() -> (u64, u64) {
 fn get_cpu_times() -> (u64, u64) {
     #[repr(C)]
     #[derive(Default)]
+    #[allow(non_snake_case)]
     struct FILETIME {
         dwLowDateTime: u32,
         dwHighDateTime: u32,
