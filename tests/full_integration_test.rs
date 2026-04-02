@@ -235,7 +235,7 @@ async fn test_csv_created_client() {
     // Initialize CSV
     btest_rs::csv_output::init(&csv_path).unwrap();
 
-    let (tx, rx, lost, intervals) = run_client_test(
+    let (tx, rx, lost, _intervals) = run_client_test(
         "127.0.0.1", port, false, true, false, None, None,
     ).await;
 
