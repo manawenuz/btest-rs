@@ -127,6 +127,12 @@ async fn run_tcp_test_client(stream: TcpStream, cmd: Command, state: Arc<Bandwid
         Some(tokio::spawn(async move {
             tcp_client_rx_loop(reader, state_rx).await
         }))
+    } else if client_should_tx {
+        // TX-only: still need to read the server's status messages to get remote CPU.
+        // Don't count these bytes as RX data.
+        Some(tokio::spawn(async move {
+            tcp_client_status_reader(reader, state_rx).await
+        }))
     } else {
         _reader_keepalive = Some(reader);
         None
@@ -189,7 +195,49 @@ async fn tcp_client_rx_loop(
             Ok(0) | Err(_) => break,
             Ok(n) => {
                 state.rx_bytes.fetch_add(n as u64, Ordering::Relaxed);
+                // Scan for interleaved 12-byte status messages from the server.
+                // In BOTH mode, the server's TX loop injects status messages into the
+                // data stream. Status starts with 0x07 (STATUS_MSG_TYPE) and byte 1
+                // has the high bit set (0x80 | cpu%). Data packets are all zeros.
+                if n >= STATUS_MSG_SIZE {
+                    for i in 0..=(n - STATUS_MSG_SIZE) {
+                        if buf[i] == STATUS_MSG_TYPE && buf[i + 1] >= 0x80 {
+                            let cpu = buf[i + 1] & 0x7F;
+                            state.remote_cpu.store(cpu.min(100), Ordering::Relaxed);
+                            break;
+                        }
+                    }
+                }
             }
+        }
+    }
+}
+
+/// Read only status messages from the server (TX-only mode).
+/// The server sends 12-byte status messages on the TCP connection even when
+/// the client is only transmitting. We need to read them to get remote CPU
+/// and to prevent the TCP receive buffer from filling up.
+async fn tcp_client_status_reader(
+    mut reader: tokio::net::tcp::OwnedReadHalf,
+    state: Arc<BandwidthState>,
+) {
+    let mut buf = [0u8; STATUS_MSG_SIZE];
+    while state.running.load(Ordering::Relaxed) {
+        match reader.read_exact(&mut buf).await {
+            Ok(_) => {
+                if buf[0] == STATUS_MSG_TYPE && buf[1] >= 0x80 {
+                    let status = StatusMessage::deserialize(&buf);
+                    state.remote_cpu.store(status.cpu_load, Ordering::Relaxed);
+                    // Use server's bytes_received for TX speed adaptation
+                    if status.bytes_received > 0 {
+                        let new_speed =
+                            ((status.bytes_received as u64 * 8 * 3) / 2) as u32;
+                        state.tx_speed.store(new_speed, Ordering::Relaxed);
+                        state.tx_speed_changed.store(true, Ordering::Relaxed);
+                    }
+                }
+            }
+            Err(_) => break,
         }
     }
 }

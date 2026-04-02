@@ -29,7 +29,7 @@ pub fn get() -> u8 {
 
 // --- Platform-specific implementation ---
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn get_cpu_times() -> (u64, u64) {
     // Read /proc/stat: cpu  user nice system idle iowait irq softirq steal
     if let Ok(content) = std::fs::read_to_string("/proc/stat") {
@@ -165,6 +165,7 @@ fn get_cpu_times() -> (u64, u64) {
 
 #[cfg(not(any(
     target_os = "linux",
+    target_os = "android",
     target_os = "macos",
     target_os = "windows",
     target_os = "freebsd",
@@ -193,6 +194,7 @@ mod tests {
         // On supported platforms, total should be > 0
         if cfg!(any(
             target_os = "linux",
+            target_os = "android",
             target_os = "macos",
             target_os = "windows",
             target_os = "freebsd",

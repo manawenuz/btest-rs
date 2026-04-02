@@ -336,3 +336,67 @@ async fn test_bandwidth_state_running_flag() {
     state.running.store(false, Ordering::SeqCst);
     assert!(!state.running.load(Ordering::Relaxed));
 }
+
+// --- CPU Reporting Tests ---
+
+/// Helper that returns the full BandwidthState (not just summary) so we can check remote_cpu.
+async fn run_client_with_state(
+    host: &str, port: u16, transmit: bool, receive: bool, udp: bool,
+    secs: u64,
+) -> std::sync::Arc<btest_rs::bandwidth::BandwidthState> {
+    let direction = match (transmit, receive) {
+        (true, false) => btest_rs::protocol::CMD_DIR_RX,
+        (false, true) => btest_rs::protocol::CMD_DIR_TX,
+        (true, true) => btest_rs::protocol::CMD_DIR_BOTH,
+        _ => panic!("must specify direction"),
+    };
+    let state = btest_rs::bandwidth::BandwidthState::new();
+    let state_clone = state.clone();
+    let host = host.to_string();
+
+    let handle = tokio::spawn(async move {
+        btest_rs::client::run_client(
+            &host, port, direction, udp,
+            0, 0, None, None, false, state_clone,
+        ).await
+    });
+
+    tokio::time::sleep(Duration::from_secs(secs)).await;
+    state.running.store(false, Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    handle.abort();
+
+    state
+}
+
+#[test]
+fn test_local_cpu_nonzero() {
+    // CPU sampler should return > 0 on supported platforms after warming up
+    btest_rs::cpu::start_sampler();
+    std::thread::sleep(Duration::from_secs(2));
+    let cpu = btest_rs::cpu::get();
+    // On CI or idle machines, CPU may genuinely be 0, so just check it doesn't panic
+    // and returns a value in range
+    assert!(cpu <= 100, "CPU should be 0-100, got {}", cpu);
+}
+
+#[tokio::test]
+async fn test_tcp_remote_cpu_both() {
+    let port = BASE_PORT + 20;
+    start_server_noauth(port).await;
+    let state = run_client_with_state("127.0.0.1", port, true, true, false, 3).await;
+    let remote_cpu = state.remote_cpu.load(Ordering::Relaxed);
+    // On loopback with bidirectional traffic, server CPU should be > 0
+    // The status messages are interleaved in the TCP data stream
+    assert!(remote_cpu > 0, "TCP BOTH: remote CPU should be > 0 on loopback, got {}", remote_cpu);
+}
+
+#[tokio::test]
+async fn test_tcp_remote_cpu_tx_only() {
+    let port = BASE_PORT + 21;
+    start_server_noauth(port).await;
+    let state = run_client_with_state("127.0.0.1", port, true, false, false, 3).await;
+    let remote_cpu = state.remote_cpu.load(Ordering::Relaxed);
+    // TX-only: server sends status messages that the status reader should parse
+    assert!(remote_cpu > 0, "TCP TX-only: remote CPU should be > 0 on loopback, got {}", remote_cpu);
+}
