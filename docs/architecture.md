@@ -2,282 +2,181 @@
 
 ## Overview
 
-btest-rs is a Rust reimplementation of the MikroTik Bandwidth Test protocol. It operates in two modes: **server** (accepts connections from MikroTik devices) and **client** (connects to MikroTik btest servers).
+btest-rs is a Rust reimplementation of the MikroTik Bandwidth Test protocol. It operates in two modes: **server** (accepts connections from MikroTik devices) and **client** (connects to MikroTik btest servers). An optional **server-pro** mode adds multi-user support, quotas, and a web dashboard.
 
 ## Module Structure
 
-```mermaid
-graph TB
-    main["main.rs<br/>CLI parsing (clap)"]
-    server["server.rs<br/>Server mode"]
-    client["client.rs<br/>Client mode"]
-    protocol["protocol.rs<br/>Wire protocol types"]
-    auth["auth.rs<br/>MD5 authentication"]
-    ecsrp5["ecsrp5.rs<br/>EC-SRP5 authentication<br/>(Curve25519 Weierstrass)"]
-    bandwidth["bandwidth.rs<br/>Rate control & reporting"]
-    csv_output["csv_output.rs<br/>CSV result logging"]
-    syslog["syslog_logger.rs<br/>Remote syslog (RFC 3164)"]
-    lib["lib.rs<br/>Public API for tests"]
+```
+src/
+├── main.rs              # CLI entry point, argument parsing (clap)
+├── lib.rs               # Public API (re-exports all modules for tests/pro)
+├── protocol.rs          # Wire format: Command, StatusMessage, constants
+├── auth.rs              # MD5 challenge-response authentication
+├── ecsrp5.rs            # EC-SRP5 authentication (Curve25519 Weierstrass)
+├── server.rs            # Server mode: listener, TCP/UDP handlers, multi-conn
+├── client.rs            # Client mode: connector, TCP/UDP handlers, status parsing
+├── bandwidth.rs         # Rate limiting, formatting, shared BandwidthState, byte budget
+├── cpu.rs               # CPU sampler (macOS, Linux, Android, Windows, FreeBSD)
+├── csv_output.rs        # CSV result logging (append-mode, auto-header)
+├── syslog_logger.rs     # Remote syslog sender (RFC 3164 / BSD format)
+├── bin/
+│   ├── client_only.rs   # Stripped client binary for embedded/OpenWrt
+│   └── server_only.rs   # Stripped server binary for embedded/OpenWrt
+└── server_pro/          # Optional (--features pro)
+    ├── main.rs          # Pro CLI: user management, quota flags, web port
+    ├── server_loop.rs   # Accept loop with auth, quotas, multi-conn sessions
+    ├── user_db.rs       # SQLite: users, usage, ip_usage, sessions, intervals
+    ├── quota.rs         # QuotaManager: per-user + per-IP limits, remaining_budget()
+    ├── enforcer.rs      # QuotaEnforcer: periodic checks, max_duration, StopReason
+    ├── ldap_auth.rs     # LDAP auth scaffold (not yet wired)
+    └── web/
+        └── mod.rs       # Axum web dashboard: Chart.js, quota bars, JSON export
+```
 
-    main --> server
-    main --> client
-    main --> bandwidth
-    main --> csv_output
-    main --> syslog
-    server --> protocol
-    server --> auth
-    server --> ecsrp5
-    server --> bandwidth
-    server --> syslog
-    client --> protocol
-    client --> auth
-    client --> ecsrp5
-    client --> bandwidth
-    lib --> server
-    lib --> client
-    lib --> protocol
-    lib --> auth
-    lib --> ecsrp5
-    lib --> bandwidth
+## CLI Output Format
+
+The client outputs one line per second per direction:
+
+```
+[   5]  TX  285.47 Mbps (35684352 bytes)  cpu: 20%/62%
+[   5]  RX  283.64 Mbps (35454988 bytes)  cpu: 20%/62%  lost: 12
+```
+
+Format: `[interval] direction speed (bytes) cpu: local%/remote% [lost: N]`
+
+At test end, a summary line:
+```
+TEST_END peer=172.16.81.1 proto=TCP dir=both duration=60s tx_avg=284.94Mbps rx_avg=272.83Mbps tx_bytes=2137030656 rx_bytes=2046260728 lost=0
 ```
 
 ## Data Flow
 
 ### Server Mode (MikroTik connects to us)
 
-```mermaid
-sequenceDiagram
-    participant MK as MikroTik Client
-    participant TCP as TCP Control<br/>(port 2000)
-    participant SRV as btest-rs Server
-    participant UDP as UDP Data<br/>(port 2001+)
-
-    MK->>TCP: Connect
-    SRV->>TCP: HELLO [01 00 00 00]
-    MK->>TCP: Command [16 bytes]
-    Note over SRV: Parse proto, direction,<br/>tx_size, speeds
-
-    alt No auth configured
-        SRV->>TCP: AUTH_OK [01 00 00 00]
-    else MD5 auth (RouterOS < 6.43)
-        SRV->>TCP: AUTH_REQUIRED [02 00 00 00]
-        SRV->>TCP: Challenge [16 random bytes]
-        MK->>TCP: Response [16 hash + 32 username]
-        Note over SRV: Verify MD5(pass + MD5(pass + challenge))
-        SRV->>TCP: AUTH_OK or AUTH_FAILED
-    else EC-SRP5 auth (RouterOS >= 6.43, --ecsrp5 flag)
-        SRV->>TCP: EC-SRP5 [03 00 00 00]
-        MK->>TCP: [len][username\0][client_pubkey:32][parity:1]
-        SRV->>TCP: [len][server_pubkey:32][parity:1][salt:16]
-        MK->>TCP: [len][client_confirmation:32]
-        SRV->>TCP: [len][server_confirmation:32]
-        Note over SRV: Curve25519 Weierstrass EC-SRP5<br/>See docs/ecsrp5-research.md
-        SRV->>TCP: AUTH_OK [01 00 00 00]
-    end
-
-    alt TCP mode
-        Note over SRV,MK: Data flows on same TCP connection
-        loop Every second
-            SRV-->>SRV: Print bandwidth stats
-        end
-    else UDP mode
-        SRV->>TCP: UDP port [2 bytes BE]
-        Note over SRV: Bind UDP socket
-        par TX Thread (if server transmits)
-            loop Continuous
-                SRV->>UDP: Data packets [seq + payload]
-            end
-        and RX Thread (if server receives)
-            loop Continuous
-                UDP->>SRV: Data packets [seq + payload]
-            end
-        and Status Loop (TCP control)
-            loop Every 1 second
-                MK->>TCP: Status [12 bytes]
-                SRV->>TCP: Status [12 bytes]
-                Note over SRV: Adjust TX speed<br/>based on client feedback
-            end
-        end
-    end
 ```
+MikroTik → TCP:2000 → HELLO → Command [16 bytes] → Auth → Data Transfer
+```
+
+1. Server sends HELLO `[01 00 00 00]`
+2. Client sends 16-byte command (protocol, direction, tx_size, speeds, conn_count)
+3. Auth: none (`01`), MD5 (`02`), or EC-SRP5 (`03`)
+4. TCP: data flows on same connection, 12-byte status messages interleaved every 1s
+5. UDP: server sends port number, data on UDP, status exchange stays on TCP
 
 ### Client Mode (we connect to MikroTik)
 
-```mermaid
-sequenceDiagram
-    participant CLI as btest-rs Client
-    participant TCP as TCP Control
-    participant MK as MikroTik Server
+1. Connect to MikroTik:2000
+2. Read HELLO, send command
+3. Auto-detect auth type from response byte, authenticate
+4. Start data transfer with status exchange
 
-    CLI->>TCP: Connect to MikroTik:2000
-    MK->>TCP: HELLO
-    CLI->>TCP: Command [16 bytes]
-    Note over CLI: direction bits tell server<br/>what to do (TX/RX/BOTH)
+### Status Message Format (12 bytes)
 
-    alt Auth response 01 (no auth)
-        Note over CLI: No auth, proceed
-    else Auth response 02 (MD5)
-        MK->>TCP: Challenge [16 random bytes]
-        CLI->>TCP: MD5 response [48 bytes]
-        MK->>TCP: AUTH_OK
-    else Auth response 03 (EC-SRP5)
-        CLI->>TCP: [len][username\0][client_pubkey:32][parity:1]
-        MK->>TCP: [len][server_pubkey:32][parity:1][salt:16]
-        CLI->>TCP: [len][client_confirmation:32]
-        MK->>TCP: [len][server_confirmation:32]
-        MK->>TCP: AUTH_OK
-    end
-
-    Note over CLI,MK: Data transfer begins<br/>(TCP or UDP, same as server)
 ```
+[0x07][cpu:1][pad:2][seq:4 LE][bytes_received:4 LE]
+```
+
+- Byte 0: `0x07` (STATUS_MSG_TYPE)
+- Byte 1: `0x80 | cpu_percentage` (MikroTik encoding)
+- Bytes 4-7: sequence number (little-endian u32)
+- Bytes 8-11: bytes received this interval (little-endian u32)
 
 ## Threading Model
 
-```mermaid
-graph TB
-    subgraph "Server Process"
-        LISTEN["Main Loop<br/>Accept connections"]
-        LISTEN -->|spawn per client| HANDLER
+All I/O is async via tokio. Per-client:
+- **TX task**: sends data packets at target rate
+- **RX task**: receives data, counts bytes, extracts status messages (TCP BOTH mode)
+- **Status loop**: exchanges 12-byte status messages every 1s, prints bandwidth
+- **Status reader** (TCP TX-only): reads server's status messages for remote CPU
 
-        subgraph "Per-Client Tasks (tokio)"
-            HANDLER["Connection Handler<br/>Handshake + Auth"]
-            HANDLER --> TX["TX Task<br/>Send data packets"]
-            HANDLER --> RX["RX Task<br/>Receive data packets"]
-            HANDLER --> STATUS["Status Loop<br/>Exchange stats every 1s"]
-        end
-    end
+Shared state via `Arc<BandwidthState>` with atomic counters — no mutexes.
 
-    subgraph "Shared State (Arc + Atomics)"
-        STATE["BandwidthState"]
-        TX_BYTES["tx_bytes: AtomicU64"]
-        RX_BYTES["rx_bytes: AtomicU64"]
-        TX_SPEED["tx_speed: AtomicU32"]
-        RUNNING["running: AtomicBool"]
-    end
+### BandwidthState Fields
 
-    TX --> TX_BYTES
-    RX --> RX_BYTES
-    STATUS --> TX_BYTES
-    STATUS --> RX_BYTES
-    STATUS --> TX_SPEED
-    TX --> TX_SPEED
-    TX --> RUNNING
-    RX --> RUNNING
-    STATUS --> RUNNING
+| Field | Type | Purpose |
+|-------|------|---------|
+| `tx_bytes` | AtomicU64 | Bytes sent this interval (reset by swap) |
+| `rx_bytes` | AtomicU64 | Bytes received this interval |
+| `tx_speed` | AtomicU32 | Target TX speed (dynamic, from server feedback) |
+| `running` | AtomicBool | Test active flag |
+| `remote_cpu` | AtomicU8 | Remote peer's CPU (from status messages) |
+| `byte_budget` | AtomicU64 | Remaining quota bytes (u64::MAX = unlimited) |
+| `total_tx_bytes` | AtomicU64 | Cumulative TX (never reset) |
+| `total_rx_bytes` | AtomicU64 | Cumulative RX (never reset) |
+
+## Server Pro Architecture
+
+Optional feature (`--features pro`) providing a multi-user public btest server.
+
 ```
+Accept → IP check → HELLO → Command → Auth (DB) → Quota check → Budget set → Test
+                                                                      ↓
+                                                              QuotaEnforcer (parallel)
+                                                              - checks every N seconds
+                                                              - max_duration timeout
+                                                              - sets running=false on exceed
+```
+
+**Byte budget**: Before the test starts, `remaining_budget()` computes the minimum remaining quota across all applicable limits. This is stored in `BandwidthState.byte_budget`. Every TX/RX loop checks `spend_budget()` per-packet — when budget hits 0, the test stops immediately. This prevents quota overshoot even on 10+ Gbps links.
+
+**Multi-connection TCP**: MikroTik sends `tcp_conn_count` connections. The first authenticates and registers a session token. Subsequent connections match by token and join. When all connections arrive, the test starts with per-stream TX/RX tasks.
+
+**Web dashboard** (axum):
+- `GET /` — landing page with instructions
+- `GET /dashboard/{ip}` — per-IP dashboard with Chart.js graph, session table, quota bars
+- `GET /api/ip/{ip}/stats` — aggregate stats JSON
+- `GET /api/ip/{ip}/sessions` — session list JSON
+- `GET /api/ip/{ip}/quota` — quota usage JSON
+- `GET /api/ip/{ip}/export` — full export with human-readable fields
+- `GET /api/session/{id}/intervals` — per-second throughput data
+
+## CPU Usage Monitoring
+
+A background OS thread samples system CPU every 1 second:
+
+| Platform | Method |
+|----------|--------|
+| macOS | `host_statistics(HOST_CPU_LOAD_INFO)` |
+| Linux | `/proc/stat` aggregate CPU line |
+| Android | `/proc/stat` (same as Linux) |
+| Windows | `GetSystemTimes()` FFI |
+| FreeBSD | `sysctl kern.cp_time` |
+
+Stored in global `AtomicU8`, included in status messages as `0x80 | percentage`.
+
+## Build Targets
+
+| Target | Binary | Notes |
+|--------|--------|-------|
+| `x86_64-unknown-linux-musl` | btest | Static, zero deps |
+| `aarch64-unknown-linux-musl` | btest | RPi 4/5, ARM servers |
+| `armv7-unknown-linux-musleabihf` | btest | RPi 3, OpenWrt |
+| `x86_64-pc-windows-gnu` | btest.exe | Cross-compiled |
+| `aarch64-linux-android` | btest | Termux ARMv8 |
+| `armv7-linux-androideabi` | btest | Termux ARMv7 |
+| macOS (native) | btest | Apple Silicon + Intel |
+| Docker (multi-arch) | image | amd64 + arm64 |
 
 ## Key Design Decisions
 
-### 1. Tokio async runtime
+1. **Tokio async runtime** — all I/O is async, handles hundreds of concurrent connections
+2. **Lock-free shared state** — AtomicU64 counters, `swap(0)` reads and resets per interval
+3. **Direction bits from server perspective** — `0x01`=server RX, `0x02`=server TX, `0x03`=both
+4. **TCP socket half keepalive** — dropping `OwnedWriteHalf` sends FIN, so unused halves are kept alive
+5. **Static musl binary** — ~2 MB, zero runtime dependencies
+6. **EC-SRP5 with big integer arithmetic** — Curve25519 Weierstrass form via `num-bigint`
+7. **Global singletons for syslog/CSV** — `Mutex<Option<...>>` statics, initialized once at startup
+8. **Shared BandwidthState for timeout survival** — state created in main(), survives tokio cancellation
+9. **Inline byte budget** — per-packet quota check with fast path (u64::MAX = unlimited, returns immediately)
+10. **TCP status message scanning** — RX loop detects 12-byte status messages in the data stream by scanning for `0x07` marker byte to extract remote CPU
 
-All I/O is async via tokio. Each client connection spawns independent tasks for TX, RX, and status exchange. This allows handling hundreds of concurrent connections on a single thread pool.
+## Tests
 
-### 2. Lock-free shared state
-
-TX/RX threads and the status loop share bandwidth counters via `AtomicU64`. No mutexes needed -- `swap(0)` atomically reads and resets counters each interval.
-
-### 3. Sequential status loop (matching C pselect)
-
-The UDP status exchange uses a sequential timeout-read-then-send pattern rather than `tokio::select!`. This ensures our status messages are sent exactly every 1 second, preventing MikroTik's speed adaptation from seeing irregular feedback.
-
-### 4. Direction bits from server perspective
-
-The direction byte in the protocol means what the **server** should do:
-- `0x01` (CMD_DIR_RX) = server receives
-- `0x02` (CMD_DIR_TX) = server transmits
-- `0x03` (CMD_DIR_BOTH) = bidirectional
-
-The client inverts before sending: client "transmit" sends `CMD_DIR_RX` (telling server to receive).
-
-### 5. TCP socket half keepalive
-
-When only one direction is active (e.g., TX only), the unused socket half is kept alive. Dropping `OwnedWriteHalf` sends a TCP FIN, which MikroTik interprets as disconnection.
-
-### 6. Static musl binary
-
-Release builds use musl for a fully static binary with zero runtime dependencies. The binary is approximately 2 MB and runs on any Linux distribution.
-
-### 7. EC-SRP5 with big integer arithmetic
-
-The EC-SRP5 implementation uses `num-bigint` for Curve25519 Weierstrass-form elliptic curve arithmetic. MikroTik's authentication uses the Weierstrass form (not the more common Montgomery or Edwards forms), requiring direct field arithmetic over the prime `2^255 - 19`. The implementation includes point multiplication, `lift_x`, `redp1` (hash-to-curve), and Montgomery coordinate conversion.
-
-### 8. Global singletons for syslog and CSV
-
-The syslog and CSV modules use `Mutex<Option<...>>` global statics. This avoids threading state through every function call while remaining safe. Both modules are initialized once at startup and used from any async task via their public API functions.
-
-### 9. Shared BandwidthState for client duration timeout
-
-When running with `--duration`, the tokio timeout cancels the client future. To preserve stats accumulated during the test, `BandwidthState` is created in `main()` and passed as an `Arc` into `run_client()`. The state survives cancellation because `main()` holds a reference. The `record_interval()` method accumulates totals that `summary()` returns.
-
-### 10. IPv6 socket handling
-
-IPv6 requires special handling on macOS:
-- UDP sockets bind to `[::]` for IPv6 peers, `0.0.0.0` for IPv4
-- Socket send/receive buffers set to 4MB via `socket2` before wrapping with tokio
-- `SocketAddr::new()` used instead of string formatting (avoids `[addr]:port` parsing issues)
-- Connected sockets preferred for single-connection (avoids ENOBUFS on `send_to()`)
-- NDP probe packet sent before data blast to populate neighbor cache
-- Adaptive backoff on ENOBUFS (200μs→10ms, resets on success)
-
-### 11. CPU usage monitoring
-
-A background OS thread samples system CPU every 1 second via:
-- **macOS:** `host_statistics(HOST_CPU_LOAD_INFO)` — returns user/system/idle/nice ticks
-- **Linux:** `/proc/stat` — reads aggregate CPU line
-
-The percentage is stored in a global `AtomicU8` and included in every status message at byte 1 using MikroTik's encoding: `0x80 | percentage`. On receive, the remote CPU is decoded with `byte & 0x7F` and capped at 100%. Both local and remote CPU are displayed per interval and logged to CSV/syslog.
-
-## File Layout
-
-```
-btest-rs/
-├── src/
-│   ├── main.rs              # CLI entry point, argument parsing (clap)
-│   ├── lib.rs               # Public API (used by integration tests)
-│   ├── protocol.rs          # Wire format: Command, StatusMessage, constants
-│   ├── auth.rs              # MD5 challenge-response authentication
-│   ├── ecsrp5.rs            # EC-SRP5 authentication (Curve25519 Weierstrass)
-│   ├── server.rs            # Server mode: listener, TCP/UDP handlers
-│   ├── client.rs            # Client mode: connector, TCP/UDP handlers
-│   ├── bandwidth.rs         # Rate limiting, formatting, shared state
-│   ├── cpu.rs               # CPU usage sampler (macOS + Linux)
-│   ├── csv_output.rs        # CSV result logging (append-mode, auto-header)
-│   └── syslog_logger.rs     # Remote syslog sender (RFC 3164 / BSD format)
-├── tests/
-│   └── integration_test.rs  # End-to-end server/client tests
-├── scripts/
-│   ├── build-linux.sh           # Cross-compile for x86_64 Linux (musl)
-│   ├── build-macos-release.sh   # macOS release build
-│   ├── install-service.sh       # systemd service installer
-│   ├── push-docker.sh           # Push Docker image to registry
-│   ├── test-local.sh            # Loopback self-test
-│   ├── test-mikrotik.sh         # Test against MikroTik device
-│   ├── test-docker.sh           # Docker container test
-│   └── debug-capture.sh         # Packet capture for debugging
-├── docs/
-│   ├── architecture.md          # This file
-│   ├── protocol.md              # Protocol specification
-│   ├── user-guide.md            # Usage documentation
-│   ├── docker.md                # Docker & deployment guide
-│   ├── ecsrp5-research.md       # EC-SRP5 reverse-engineering notes
-│   └── man/
-│       └── btest.1              # Unix manual page (troff format)
-├── tests/
-│   ├── integration_test.rs      # Basic server/client handshake tests
-│   ├── ecsrp5_test.rs           # EC-SRP5 authentication tests
-│   └── full_integration_test.rs # Comprehensive: all protocols, IPv4/6, CSV, syslog
-├── deploy/
-│   └── syslog-ng-btest.conf    # syslog-ng configuration for btest events
-├── proto-test/                  # Python EC-SRP5 prototype (research branch)
-│   ├── btest_ecsrp5_client.py  # Working Python btest EC-SRP5 client
-│   ├── btest_mitm.py           # MITM proxy for protocol analysis
-│   └── elliptic_curves.py      # Curve25519 Weierstrass (MarginResearch)
-├── KNOWN_ISSUES.md              # Known bugs and platform limitations
-├── Dockerfile                   # Production Docker image (multi-stage)
-├── Dockerfile.cross             # Cross-compilation for Linux x86_64
-├── docker-compose.yml           # Docker Compose configuration
-├── Cargo.toml                   # Rust package manifest
-├── Cargo.lock                   # Dependency lock file
-├── LICENSE                      # MIT License
-└── btest-opensource/            # Original C implementation (git submodule)
-```
+| Suite | Count | What |
+|-------|-------|------|
+| Unit tests (lib) | 12 | Bandwidth parsing, CPU sampling, auth hash vectors |
+| Enforcer tests (pro) | 10 | Budget, quota, duration, flush |
+| Integration tests | 8 | Server/client handshake, auth, TCP data |
+| EC-SRP5 tests | 6 | Full auth flow, wrong password, UDP bidir |
+| Full integration | 23 | All protocols × directions, IPv4/6, CSV, syslog, CPU |
+| **Total** | **59** | |
