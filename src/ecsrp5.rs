@@ -6,6 +6,8 @@
 //!
 //! btest framing: `[len:1][payload]` (no 0x06 handler byte, unlike Winbox).
 
+use std::sync::LazyLock;
+
 use num_bigint::BigUint;
 use num_integer::Integer;
 use num_traits::{One, Zero};
@@ -14,31 +16,31 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::protocol::{BtestError, Result};
 
-// --- Curve25519 parameters in Weierstrass form ---
+// --- Curve25519 parameters in Weierstrass form (cached, computed once) ---
 
-fn p() -> BigUint {
+static P: LazyLock<BigUint> = LazyLock::new(|| {
     BigUint::parse_bytes(
         b"7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffed",
         16,
     )
     .unwrap()
-}
+});
 
-fn curve_order() -> BigUint {
+static CURVE_ORDER: LazyLock<BigUint> = LazyLock::new(|| {
     BigUint::parse_bytes(
         b"1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3ed",
         16,
     )
     .unwrap()
-}
+});
 
-fn weierstrass_a() -> BigUint {
+static WEIERSTRASS_A: LazyLock<BigUint> = LazyLock::new(|| {
     BigUint::parse_bytes(
         b"2aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa984914a144",
         16,
     )
     .unwrap()
-}
+});
 
 const MONT_A: u64 = 486662;
 
@@ -50,10 +52,10 @@ fn modinv(a: &BigUint, modulus: &BigUint) -> BigUint {
     a.modpow(&exp, modulus)
 }
 
-fn legendre_symbol(a: &BigUint, p_val: &BigUint) -> i32 {
-    let exp = (p_val - BigUint::one()) / BigUint::from(2u32);
-    let l = a.modpow(&exp, p_val);
-    if l == p_val - BigUint::one() {
+fn legendre_symbol(a: &BigUint, p: &BigUint) -> i32 {
+    let exp = (p - BigUint::one()) / BigUint::from(2u32);
+    let l = a.modpow(&exp, p);
+    if l == p - BigUint::one() {
         -1
     } else if l == BigUint::zero() {
         0
@@ -166,7 +168,7 @@ impl Point {
     }
 
     fn add(&self, other: &Point) -> Point {
-        let p_val = p();
+        let p_val = &*P;
         if self.infinity {
             return other.clone();
         }
@@ -179,44 +181,44 @@ impl Point {
 
         let lam = if self.x == other.x && self.y == other.y {
             // Point doubling
-            let three_x_sq = (BigUint::from(3u32) * &self.x * &self.x + &weierstrass_a()) % &p_val;
-            let two_y = (BigUint::from(2u32) * &self.y) % &p_val;
-            (three_x_sq * modinv(&two_y, &p_val)) % &p_val
+            let three_x_sq = (BigUint::from(3u32) * &self.x * &self.x + &*WEIERSTRASS_A) % p_val;
+            let two_y = (BigUint::from(2u32) * &self.y) % p_val;
+            (three_x_sq * modinv(&two_y, p_val)) % p_val
         } else {
             // Point addition
             let dy = if other.y >= self.y {
-                (&other.y - &self.y) % &p_val
+                (&other.y - &self.y) % p_val
             } else {
-                (&p_val - (&self.y - &other.y) % &p_val) % &p_val
+                (p_val - (&self.y - &other.y) % p_val) % p_val
             };
             let dx = if other.x >= self.x {
-                (&other.x - &self.x) % &p_val
+                (&other.x - &self.x) % p_val
             } else {
-                (&p_val - (&self.x - &other.x) % &p_val) % &p_val
+                (p_val - (&self.x - &other.x) % p_val) % p_val
             };
-            (dy * modinv(&dx, &p_val)) % &p_val
+            (dy * modinv(&dx, p_val)) % p_val
         };
 
         let x3 = {
-            let lam_sq = (&lam * &lam) % &p_val;
-            let sum_x = (&self.x + &other.x) % &p_val;
+            let lam_sq = (&lam * &lam) % p_val;
+            let sum_x = (&self.x + &other.x) % p_val;
             if lam_sq >= sum_x {
-                (lam_sq - sum_x) % &p_val
+                (lam_sq - sum_x) % p_val
             } else {
-                (&p_val - (sum_x - lam_sq) % &p_val) % &p_val
+                (p_val - (sum_x - lam_sq) % p_val) % p_val
             }
         };
         let y3 = {
             let dx = if self.x >= x3 {
-                (&self.x - &x3) % &p_val
+                (&self.x - &x3) % p_val
             } else {
-                (&p_val - (&x3 - &self.x) % &p_val) % &p_val
+                (p_val - (&x3 - &self.x) % p_val) % p_val
             };
-            let prod = (&lam * dx) % &p_val;
+            let prod = (&lam * dx) % p_val;
             if prod >= self.y {
-                (prod - &self.y) % &p_val
+                (prod - &self.y) % p_val
             } else {
-                (&p_val - (&self.y - prod) % &p_val) % &p_val
+                (p_val - (&self.y - prod) % p_val) % p_val
             }
         };
 
@@ -226,14 +228,13 @@ impl Point {
     fn scalar_mul(&self, scalar: &BigUint) -> Point {
         let mut result = Point::infinity();
         let mut base = self.clone();
-        let mut k = scalar.clone();
+        let bits = scalar.bits();
 
-        while !k.is_zero() {
-            if &k & &BigUint::one() == BigUint::one() {
+        for i in 0..bits {
+            if scalar.bit(i) {
                 result = result.add(&base);
             }
             base = base.add(&base);
-            k >>= 1;
         }
         result
     }
@@ -249,11 +250,11 @@ struct WCurve {
 
 impl WCurve {
     fn new() -> Self {
-        let p_val = p();
+        let p_val = &*P;
         let mont_a = BigUint::from(MONT_A);
-        let three_inv = modinv(&BigUint::from(3u32), &p_val);
-        let conversion_from_m = (&mont_a * &three_inv) % &p_val;
-        let conversion_to_m = (&p_val - &conversion_from_m) % &p_val;
+        let three_inv = modinv(&BigUint::from(3u32), p_val);
+        let conversion_from_m = (&mont_a * &three_inv) % p_val;
+        let conversion_to_m = (p_val - &conversion_from_m) % p_val;
 
         let mut curve = WCurve {
             g: Point::infinity(),
@@ -265,8 +266,8 @@ impl WCurve {
     }
 
     fn to_montgomery(&self, pt: &Point) -> ([u8; 32], u8) {
-        let p_val = p();
-        let x = (&pt.x + &self.conversion_to_m) % &p_val;
+        let p_val = &*P;
+        let x = (&pt.x + &self.conversion_to_m) % p_val;
         let parity = if pt.y.bit(0) { 1u8 } else { 0u8 };
         let mut bytes = [0u8; 32];
         let x_bytes = x.to_bytes_be();
@@ -276,14 +277,14 @@ impl WCurve {
     }
 
     fn lift_x(&self, x_mont: &BigUint, parity: bool) -> Point {
-        let p_val = p();
-        let x = x_mont % &p_val;
+        let p_val = &*P;
+        let x = x_mont % p_val;
         // y^2 = x^3 + Ax^2 + x (Montgomery)
-        let y_squared = (&x * &x * &x + BigUint::from(MONT_A) * &x * &x + &x) % &p_val;
+        let y_squared = (&x * &x * &x + BigUint::from(MONT_A) * &x * &x + &x) % p_val;
         // Convert x to Weierstrass
-        let x_w = (&x + &self.conversion_from_m) % &p_val;
+        let x_w = (&x + &self.conversion_from_m) % p_val;
 
-        if let Some((y1, y2)) = prime_mod_sqrt(&y_squared, &p_val) {
+        if let Some((y1, y2)) = prime_mod_sqrt(&y_squared, p_val) {
             let pt1 = Point::new(x_w.clone(), y1);
             let pt2 = Point::new(x_w, y2);
             if parity {
@@ -323,7 +324,7 @@ impl WCurve {
         password: &str,
         salt: &[u8; 16],
     ) -> [u8; 32] {
-        let inner = sha256_bytes(&format!("{}:{}", username, password).as_bytes().to_vec());
+        let inner = sha256_bytes(format!("{}:{}", username, password).as_bytes());
         let mut input = Vec::with_capacity(16 + 32);
         input.extend_from_slice(salt);
         input.extend_from_slice(&inner);
@@ -415,8 +416,8 @@ pub async fn client_authenticate<S: AsyncReadExt + AsyncWriteExt + Unpin>(
     let i_int = BigUint::from_bytes_be(&i);
     let j_int = BigUint::from_bytes_be(&j);
     let s_a_int = BigUint::from_bytes_be(&s_a);
-    let order = curve_order();
-    let scalar = ((&i_int * &j_int) + &s_a_int) % &order;
+    let order = &*CURVE_ORDER;
+    let scalar = ((&i_int * &j_int) + &s_a_int) % order;
 
     let z_point = w_b_unblinded.scalar_mul(&scalar);
     let (z, _) = w.to_montgomery(&z_point);

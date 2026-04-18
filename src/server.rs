@@ -135,6 +135,11 @@ async fn handle_client(
 ) -> Result<()> {
     stream.set_nodelay(true)?;
 
+    // Set TCP socket buffers to 4MB (matching UDP path) for high throughput
+    let sock_ref = socket2::SockRef::from(&stream);
+    let _ = sock_ref.set_send_buffer_size(4 * 1024 * 1024);
+    let _ = sock_ref.set_recv_buffer_size(4 * 1024 * 1024);
+
     send_hello(&mut stream).await?;
 
     // Read 16-byte command (or whatever the client sends)
@@ -575,8 +580,10 @@ async fn tcp_tx_loop_inner(
 ) {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let packet = vec![0u8; tx_size];
     let mut interval = bandwidth::calc_send_interval(tx_speed, tx_size as u16);
+    // Use larger writes when running unlimited to reduce syscall overhead
+    let effective_size = if interval.is_none() { tx_size.max(256 * 1024) } else { tx_size };
+    let packet = vec![0u8; effective_size];
     let mut next_send = Instant::now();
     let mut next_status = Instant::now() + Duration::from_secs(1);
     let mut status_seq: u32 = 0;
@@ -599,14 +606,14 @@ async fn tcp_tx_loop_inner(
             next_status = Instant::now() + Duration::from_secs(1);
         }
 
-        if !state.spend_budget(tx_size as u64) {
+        if !state.spend_budget(effective_size as u64) {
             break;
         }
         if writer.write_all(&packet).await.is_err() {
             state.running.store(false, Ordering::SeqCst);
             break;
         }
-        state.tx_bytes.fetch_add(tx_size as u64, Ordering::Relaxed);
+        state.tx_bytes.fetch_add(effective_size as u64, Ordering::Relaxed);
 
         if state.tx_speed_changed.load(Ordering::Relaxed) {
             state.tx_speed_changed.store(false, Ordering::Relaxed);
@@ -630,7 +637,7 @@ async fn tcp_tx_loop_inner(
 }
 
 async fn tcp_rx_loop(mut reader: tokio::net::tcp::OwnedReadHalf, state: Arc<BandwidthState>) {
-    let mut buf = vec![0u8; 65536];
+    let mut buf = vec![0u8; 256 * 1024];
     while state.running.load(Ordering::Relaxed) {
         match reader.read(&mut buf).await {
             Ok(0) | Err(_) => {

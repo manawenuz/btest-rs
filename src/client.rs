@@ -27,6 +27,11 @@ pub async fn run_client(
     let mut stream = TcpStream::connect(&addr).await?;
     stream.set_nodelay(true)?;
 
+    // Set TCP socket buffers to 4MB for high throughput
+    let sock_ref = socket2::SockRef::from(&stream);
+    let _ = sock_ref.set_send_buffer_size(4 * 1024 * 1024);
+    let _ = sock_ref.set_recv_buffer_size(4 * 1024 * 1024);
+
     recv_hello(&mut stream).await?;
     tracing::info!("Connected to server");
 
@@ -154,15 +159,17 @@ async fn tcp_client_tx_loop(
 ) {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let packet = vec![0u8; tx_size]; // TCP data is all zeros
     let mut interval = bandwidth::calc_send_interval(tx_speed, tx_size as u16);
+    // Use larger writes when running unlimited to reduce syscall overhead
+    let effective_size = if interval.is_none() { tx_size.max(256 * 1024) } else { tx_size };
+    let packet = vec![0u8; effective_size]; // TCP data is all zeros
     let mut next_send = Instant::now();
 
     while state.running.load(Ordering::Relaxed) {
         if writer.write_all(&packet).await.is_err() {
             break;
         }
-        state.tx_bytes.fetch_add(tx_size as u64, Ordering::Relaxed);
+        state.tx_bytes.fetch_add(effective_size as u64, Ordering::Relaxed);
 
         if state.tx_speed_changed.load(Ordering::Relaxed) {
             state.tx_speed_changed.store(false, Ordering::Relaxed);
@@ -189,7 +196,7 @@ async fn tcp_client_rx_loop(
     mut reader: tokio::net::tcp::OwnedReadHalf,
     state: Arc<BandwidthState>,
 ) {
-    let mut buf = vec![0u8; 65536];
+    let mut buf = vec![0u8; 256 * 1024];
     while state.running.load(Ordering::Relaxed) {
         match reader.read(&mut buf).await {
             Ok(0) | Err(_) => break,
