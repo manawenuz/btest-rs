@@ -22,6 +22,19 @@ struct TcpSession {
 
 type SessionMap = Arc<Mutex<HashMap<u16, TcpSession>>>;
 
+fn tcp_status_send_buffer(tx_size: usize, tx_speed: u32) -> usize {
+    // Keep enough data in flight for non-trivial RTTs without allowing an
+    // unlimited queue to bury the one-second status frames.  A quarter second
+    // of configured traffic covers typical WAN paths; unlimited tests use the
+    // same 4 MiB ceiling as the regular client socket buffers.
+    let rate_window = if tx_speed == 0 {
+        4 * 1024 * 1024
+    } else {
+        (tx_speed as usize / 8 / 4).clamp(64 * 1024, 4 * 1024 * 1024)
+    };
+    rate_window.max(tx_size.saturating_mul(2))
+}
+
 pub async fn run_server(
     port: u16,
     auth_user: Option<String>,
@@ -379,7 +392,8 @@ pub async fn tcp_tx_task(
     tx_speed: u32,
     state: Arc<BandwidthState>,
 ) {
-    tcp_tx_loop(writer, tx_size, tx_speed, state).await;
+    let limiter = bandwidth::RateLimiter::new(tx_speed);
+    tcp_tx_loop(writer, tx_size, tx_speed, state, limiter).await;
 }
 
 /// Public RX task for multi-connection use by server_pro.
@@ -412,7 +426,16 @@ async fn run_tcp_test_inner(stream: TcpStream, cmd: Command, state: Arc<Bandwidt
     let server_should_tx = cmd.server_tx();
     let server_should_rx = cmd.server_rx();
     let tx_speed = cmd.remote_tx_speed;
+    let tx_limiter = bandwidth::RateLimiter::new(tx_speed);
 
+    if server_should_tx && server_should_rx {
+        // Status frames share the TCP byte stream with test data.  A large
+        // kernel send queue can leave a status frame behind several seconds
+        // of payload, making RouterOS display TX=0 for the whole test.
+        let sock_ref = socket2::SockRef::from(&stream);
+        let status_friendly_buffer = tcp_status_send_buffer(tx_size, tx_speed);
+        let _ = sock_ref.set_send_buffer_size(status_friendly_buffer);
+    }
     let (reader, writer) = stream.into_split();
 
     let mut _writer_keepalive = None;
@@ -421,13 +444,15 @@ async fn run_tcp_test_inner(stream: TcpStream, cmd: Command, state: Arc<Bandwidt
     let state_tx = state.clone();
     let tx_handle = if server_should_tx && server_should_rx {
         // BOTH mode: TX data + inject status messages for the RX direction
+        let limiter = tx_limiter.clone();
         Some(tokio::spawn(async move {
-            tcp_tx_with_status(writer, tx_size, tx_speed, state_tx).await
+            tcp_tx_with_status(writer, tx_size, tx_speed, state_tx, limiter).await
         }))
     } else if server_should_tx {
         // TX only
+        let limiter = tx_limiter.clone();
         Some(tokio::spawn(async move {
-            tcp_tx_loop(writer, tx_size, tx_speed, state_tx).await
+            tcp_tx_loop(writer, tx_size, tx_speed, state_tx, limiter).await
         }))
     } else if server_should_rx {
         // RX only: use writer for status messages
@@ -498,6 +523,7 @@ async fn run_tcp_multiconn_inner(streams: Vec<TcpStream>, cmd: Command, state: A
     let server_should_tx = cmd.server_tx();
     let server_should_rx = cmd.server_rx();
     let tx_speed = cmd.remote_tx_speed;
+    let tx_limiter = bandwidth::RateLimiter::new(tx_speed);
 
     let mut tx_handles = Vec::new();
     let mut rx_handles = Vec::new();
@@ -505,17 +531,24 @@ async fn run_tcp_multiconn_inner(streams: Vec<TcpStream>, cmd: Command, state: A
     let mut _reader_keepalives: Vec<tokio::net::tcp::OwnedReadHalf> = Vec::new();
 
     for tcp_stream in streams {
+        if server_should_tx && server_should_rx {
+            let sock_ref = socket2::SockRef::from(&tcp_stream);
+            let status_friendly_buffer = tcp_status_send_buffer(tx_size, tx_speed);
+            let _ = sock_ref.set_send_buffer_size(status_friendly_buffer);
+        }
         let (reader, writer) = tcp_stream.into_split();
 
         if server_should_tx && server_should_rx {
             let st = state.clone();
+            let limiter = tx_limiter.clone();
             tx_handles.push(tokio::spawn(async move {
-                tcp_tx_with_status(writer, tx_size, tx_speed, st).await
+                tcp_tx_with_status(writer, tx_size, tx_speed, st, limiter).await
             }));
         } else if server_should_tx {
             let st = state.clone();
+            let limiter = tx_limiter.clone();
             tx_handles.push(tokio::spawn(async move {
-                tcp_tx_loop(writer, tx_size, tx_speed, st).await
+                tcp_tx_loop(writer, tx_size, tx_speed, st, limiter).await
             }));
         } else if server_should_rx {
             let st = state.clone();
@@ -556,8 +589,9 @@ async fn tcp_tx_loop(
     tx_size: usize,
     tx_speed: u32,
     state: Arc<BandwidthState>,
+    limiter: Arc<bandwidth::RateLimiter>,
 ) {
-    tcp_tx_loop_inner(&mut writer, tx_size, tx_speed, &state, false).await;
+    tcp_tx_loop_inner(&mut writer, tx_size, tx_speed, &state, false, limiter).await;
 }
 
 /// TCP TX loop that also sends status messages when `send_status` is true.
@@ -567,8 +601,9 @@ async fn tcp_tx_with_status(
     tx_size: usize,
     tx_speed: u32,
     state: Arc<BandwidthState>,
+    limiter: Arc<bandwidth::RateLimiter>,
 ) {
-    tcp_tx_loop_inner(&mut writer, tx_size, tx_speed, &state, true).await;
+    tcp_tx_loop_inner(&mut writer, tx_size, tx_speed, &state, true, limiter).await;
 }
 
 async fn tcp_tx_loop_inner(
@@ -577,14 +612,18 @@ async fn tcp_tx_loop_inner(
     tx_speed: u32,
     state: &Arc<BandwidthState>,
     send_status: bool,
+    limiter: Arc<bandwidth::RateLimiter>,
 ) {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let mut interval = bandwidth::calc_send_interval(tx_speed, tx_size as u16);
-    // Use larger writes when running unlimited to reduce syscall overhead
-    let effective_size = if interval.is_none() { tx_size.max(256 * 1024) } else { tx_size };
+    // A bidirectional stream must remain interruptible so its one-second
+    // status messages are not stuck behind megabytes of queued TCP data.
+    let effective_size = if tx_speed == 0 && !send_status {
+        tx_size.max(256 * 1024)
+    } else {
+        tx_size.max(1)
+    };
     let packet = vec![0u8; effective_size];
-    let mut next_send = Instant::now();
     let mut next_status = Instant::now() + Duration::from_secs(1);
     let mut status_seq: u32 = 0;
 
@@ -618,20 +657,12 @@ async fn tcp_tx_loop_inner(
         if state.tx_speed_changed.load(Ordering::Relaxed) {
             state.tx_speed_changed.store(false, Ordering::Relaxed);
             let new_speed = state.tx_speed.load(Ordering::Relaxed);
-            interval = bandwidth::calc_send_interval(new_speed, tx_size as u16);
-            next_send = Instant::now();
+            limiter.set_rate(new_speed).await;
         }
 
-        match interval {
-            Some(iv) => {
-                let now = Instant::now();
-                if let Some(delay) = bandwidth::advance_next_send(&mut next_send, iv, now) {
-                    tokio::time::sleep(delay).await;
-                }
-            }
-            None => {
-                tokio::task::yield_now().await;
-            }
+        limiter.pace(effective_size).await;
+        if tx_speed == 0 {
+            tokio::task::yield_now().await;
         }
     }
 }
@@ -840,8 +871,8 @@ async fn udp_tx_loop(
 ) {
     let mut seq: u32 = 0;
     let mut packet = vec![0u8; tx_size];
-    let mut interval = bandwidth::calc_send_interval(initial_tx_speed, tx_size as u16);
-    let mut next_send = Instant::now();
+    let adaptive_speed = initial_tx_speed == 0;
+    let limiter = bandwidth::RateLimiter::new(initial_tx_speed);
     let mut consecutive_errors: u32 = 0;
 
     while state.running.load(Ordering::Relaxed) {
@@ -881,36 +912,17 @@ async fn udp_tx_loop(
         }
 
         // Pick up dynamic speed changes from status loop
-        if state.tx_speed_changed.load(Ordering::Relaxed) {
+        if adaptive_speed && state.tx_speed_changed.load(Ordering::Relaxed) {
             state.tx_speed_changed.store(false, Ordering::Relaxed);
             let new_speed = state.tx_speed.load(Ordering::Relaxed);
-            interval = bandwidth::calc_send_interval(new_speed, tx_size as u16);
-            next_send = Instant::now();
+            limiter.set_rate(new_speed).await;
             tracing::debug!("TX speed adjusted to {} bps ({:.2} Mbps)",
                 new_speed, new_speed as f64 / 1_000_000.0);
         }
 
-        match interval {
-            Some(iv) => {
-                let now = Instant::now();
-                if let Some(delay) = bandwidth::advance_next_send(&mut next_send, iv, now) {
-                    tokio::time::sleep(delay).await;
-                }
-            }
-            None => {
-                // "Unlimited" mode: still need minimal pacing to prevent
-                // macOS interface queue overflow (ENOBUFS).
-                // Yield every 16 packets; if errors seen, add real delay.
-                if seq % 16 == 0 {
-                    if consecutive_errors > 0 {
-                        // Back off enough for the NIC to drain
-                        tokio::time::sleep(Duration::from_micros(50)).await;
-                        consecutive_errors = 0; // reset after yielding
-                    } else {
-                        tokio::task::yield_now().await;
-                    }
-                }
-            }
+        limiter.pace(tx_size).await;
+        if initial_tx_speed == 0 && seq % 64 == 0 {
+            tokio::task::yield_now().await;
         }
     }
 }
@@ -1021,7 +1033,10 @@ async fn udp_status_loop(
                     &status_buf, client_status.seq, client_status.bytes_received, client_status.cpu_load,
                 );
 
-                if client_status.bytes_received > 0 && cmd.server_tx() {
+                if client_status.bytes_received > 0
+                    && cmd.server_tx()
+                    && cmd.remote_tx_speed == 0
+                {
                     let new_speed =
                         ((client_status.bytes_received as u64 * 8 * 3) / 2) as u32;
                     state.tx_speed.store(new_speed, Ordering::Relaxed);

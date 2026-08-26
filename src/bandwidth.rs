@@ -1,6 +1,67 @@
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+/// Session-wide asynchronous rate limiter.
+///
+/// Pacing every UDP datagram with `tokio::time::sleep()` severely undershoots
+/// on platforms with coarse timers (notably Windows).  Instead, this limiter
+/// schedules bytes against one shared timeline and sleeps only after at least
+/// a small quantum has accumulated.  Oversleep is recovered by a bounded
+/// catch-up burst, while sharing the limiter across TCP connections keeps the
+/// configured speed as a session total rather than a per-connection limit.
+#[derive(Debug)]
+pub struct RateLimiter {
+    rate_bps: AtomicU32,
+    next_send: tokio::sync::Mutex<Instant>,
+}
+
+impl RateLimiter {
+    const MIN_SLEEP: Duration = Duration::from_millis(2);
+    const MAX_CATCH_UP: Duration = Duration::from_millis(50);
+
+    pub fn new(rate_bps: u32) -> Arc<Self> {
+        Arc::new(Self {
+            rate_bps: AtomicU32::new(rate_bps),
+            next_send: tokio::sync::Mutex::new(Instant::now()),
+        })
+    }
+
+    /// Reset the schedule when the peer changes the requested rate.
+    pub async fn set_rate(&self, rate_bps: u32) {
+        self.rate_bps.store(rate_bps, std::sync::atomic::Ordering::Relaxed);
+        *self.next_send.lock().await = Instant::now();
+    }
+
+    /// Account for bytes just sent and wait until their scheduled send time.
+    pub async fn pace(&self, bytes: usize) {
+        let rate_bps = self.rate_bps.load(std::sync::atomic::Ordering::Relaxed);
+        if rate_bps == 0 || bytes == 0 {
+            return;
+        }
+
+        let nanos = ((bytes as u128 * 8 * 1_000_000_000u128) / rate_bps as u128)
+            .max(1)
+            .min(u64::MAX as u128) as u64;
+        let interval = Duration::from_nanos(nanos);
+        let now = Instant::now();
+
+        let delay = {
+            let mut next_send = self.next_send.lock().await;
+            if next_send.checked_add(Self::MAX_CATCH_UP).is_some_and(|limit| limit < now) {
+                *next_send = now;
+            }
+            *next_send += interval;
+            next_send.saturating_duration_since(now)
+        };
+
+        // Accumulate sub-millisecond packet intervals into a small batch.
+        // This avoids depending on the operating system's timer resolution.
+        if delay >= Self::MIN_SLEEP {
+            tokio::time::sleep(delay).await;
+        }
+    }
+}
 
 /// Shared state for bandwidth tracking between TX/RX threads and status reporter.
 #[derive(Debug)]
@@ -87,52 +148,6 @@ impl BandwidthState {
             self.total_lost_packets.load(Relaxed),
             self.intervals.load(Relaxed),
         )
-    }
-}
-
-/// Calculate the sleep interval between packets to achieve target bandwidth.
-/// Returns None if speed is unlimited (0).
-pub fn calc_send_interval(tx_speed_bps: u32, tx_size: u16) -> Option<Duration> {
-    if tx_speed_bps == 0 {
-        return None;
-    }
-
-    let bits_per_packet = tx_size as u64 * 8;
-    let interval_ns = (1_000_000_000u64 * bits_per_packet) / tx_speed_bps as u64;
-
-    // Replicate MikroTik behavior: if interval > 500ms, clamp to 1 second
-    if interval_ns > 500_000_000 {
-        Some(Duration::from_secs(1))
-    } else {
-        Some(Duration::from_nanos(interval_ns.max(1)))
-    }
-}
-
-/// Advance `next_send` by one interval and clamp drift.
-///
-/// When the sender falls behind (e.g., the write blocked longer than the
-/// inter-packet interval), `next_send` accumulates a debt.  Once the path
-/// clears, the loop would fire packets with *no* delay until the debt is
-/// repaid, producing a burst that overshoots the target rate.
-///
-/// This helper resets `next_send` to `now` whenever it has drifted more
-/// than 2x the interval behind the current wall-clock time, bounding the
-/// maximum burst to at most one extra interval's worth of packets.
-pub fn advance_next_send(
-    next_send: &mut std::time::Instant,
-    iv: Duration,
-    now: std::time::Instant,
-) -> Option<Duration> {
-    *next_send += iv;
-    // If we have fallen more than 2x the interval behind, reset to now
-    // to prevent a compensating burst.
-    if *next_send + iv < now {
-        *next_send = now;
-    }
-    if *next_send > now {
-        Some(*next_send - now)
-    } else {
-        None
     }
 }
 
@@ -243,15 +258,26 @@ mod tests {
         assert_eq!(parse_bandwidth("1.5M").unwrap(), 1_500_000);
     }
 
-    #[test]
-    fn test_calc_interval() {
-        // 100Mbps with 1500 byte packets
-        let interval = calc_send_interval(100_000_000, 1500).unwrap();
-        // Expected: (1e9 * 1500 * 8) / 100_000_000 = 120_000 ns = 120 us
-        assert_eq!(interval.as_nanos(), 120_000);
+    #[tokio::test]
+    async fn shared_rate_limiter_uses_one_timeline() {
+        let limiter = RateLimiter::new(8_000_000);
+        let started = Instant::now();
+        let mut workers = Vec::new();
+        for _ in 0..2 {
+            let limiter = limiter.clone();
+            workers.push(tokio::spawn(async move {
+                for _ in 0..50 {
+                    limiter.pace(1_000).await;
+                }
+            }));
+        }
+        for worker in workers {
+            worker.await.unwrap();
+        }
 
-        // Unlimited
-        assert!(calc_send_interval(0, 1500).is_none());
+        // 100,000 bytes at 8 Mbps takes 100 ms. Allow scheduler jitter while
+        // still proving that two workers do not each receive the full rate.
+        assert!(started.elapsed() >= Duration::from_millis(80));
     }
 
     #[test]

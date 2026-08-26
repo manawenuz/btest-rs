@@ -93,8 +93,8 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let (tx_speed, rx_speed) = match direction {
-        btest_rs::protocol::CMD_DIR_TX => (bw, 0),
-        btest_rs::protocol::CMD_DIR_RX => (0, bw),
+        btest_rs::protocol::CMD_DIR_TX => (0, bw),
+        btest_rs::protocol::CMD_DIR_RX => (bw, 0),
         _ => (bw, bw),
     };
 

@@ -136,7 +136,7 @@ async fn run_tcp_test_client(stream: TcpStream, cmd: Command, state: Arc<Bandwid
         // TX-only: still need to read the server's status messages to get remote CPU.
         // Don't count these bytes as RX data.
         Some(tokio::spawn(async move {
-            tcp_client_status_reader(reader, state_rx).await
+            tcp_client_status_reader(reader, state_rx, tx_speed == 0).await
         }))
     } else {
         _reader_keepalive = Some(reader);
@@ -159,11 +159,10 @@ async fn tcp_client_tx_loop(
 ) {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let mut interval = bandwidth::calc_send_interval(tx_speed, tx_size as u16);
+    let limiter = bandwidth::RateLimiter::new(tx_speed);
     // Use larger writes when running unlimited to reduce syscall overhead
-    let effective_size = if interval.is_none() { tx_size.max(256 * 1024) } else { tx_size };
+    let effective_size = if tx_speed == 0 { tx_size.max(256 * 1024) } else { tx_size };
     let packet = vec![0u8; effective_size]; // TCP data is all zeros
-    let mut next_send = Instant::now();
 
     while state.running.load(Ordering::Relaxed) {
         if writer.write_all(&packet).await.is_err() {
@@ -174,20 +173,12 @@ async fn tcp_client_tx_loop(
         if state.tx_speed_changed.load(Ordering::Relaxed) {
             state.tx_speed_changed.store(false, Ordering::Relaxed);
             let new_speed = state.tx_speed.load(Ordering::Relaxed);
-            interval = bandwidth::calc_send_interval(new_speed, tx_size as u16);
-            next_send = Instant::now();
+            limiter.set_rate(new_speed).await;
         }
 
-        match interval {
-            Some(iv) => {
-                let now = Instant::now();
-                if let Some(delay) = bandwidth::advance_next_send(&mut next_send, iv, now) {
-                    tokio::time::sleep(delay).await;
-                }
-            }
-            None => {
-                tokio::task::yield_now().await;
-            }
+        limiter.pace(effective_size).await;
+        if tx_speed == 0 {
+            tokio::task::yield_now().await;
         }
     }
 }
@@ -227,6 +218,7 @@ async fn tcp_client_rx_loop(
 async fn tcp_client_status_reader(
     mut reader: tokio::net::tcp::OwnedReadHalf,
     state: Arc<BandwidthState>,
+    adaptive_speed: bool,
 ) {
     let mut buf = [0u8; STATUS_MSG_SIZE];
     while state.running.load(Ordering::Relaxed) {
@@ -236,7 +228,7 @@ async fn tcp_client_status_reader(
                     let status = StatusMessage::deserialize(&buf);
                     state.remote_cpu.store(status.cpu_load, Ordering::Relaxed);
                     // Use server's bytes_received for TX speed adaptation
-                    if status.bytes_received > 0 {
+                    if adaptive_speed && status.bytes_received > 0 {
                         let new_speed =
                             ((status.bytes_received as u64 * 8 * 3) / 2) as u32;
                         state.tx_speed.store(new_speed, Ordering::Relaxed);
@@ -330,8 +322,7 @@ async fn udp_client_tx_loop(
 ) {
     let mut seq: u32 = 0;
     let mut packet = vec![0u8; tx_size];
-    let mut interval = bandwidth::calc_send_interval(initial_tx_speed, tx_size as u16);
-    let mut next_send = Instant::now();
+    let limiter = bandwidth::RateLimiter::new(initial_tx_speed);
     let mut consecutive_errors: u32 = 0;
 
     while state.running.load(Ordering::Relaxed) {
@@ -363,24 +354,14 @@ async fn udp_client_tx_loop(
         if state.tx_speed_changed.load(Ordering::Relaxed) {
             state.tx_speed_changed.store(false, Ordering::Relaxed);
             let new_speed = state.tx_speed.load(Ordering::Relaxed);
-            interval = bandwidth::calc_send_interval(new_speed, tx_size as u16);
-            next_send = Instant::now();
+            limiter.set_rate(new_speed).await;
             tracing::debug!("TX speed adjusted to {} bps ({:.2} Mbps)",
                 new_speed, new_speed as f64 / 1_000_000.0);
         }
 
-        match interval {
-            Some(iv) => {
-                let now = Instant::now();
-                if let Some(delay) = bandwidth::advance_next_send(&mut next_send, iv, now) {
-                    tokio::time::sleep(delay).await;
-                }
-            }
-            None => {
-                if seq % 64 == 0 {
-                    tokio::task::yield_now().await;
-                }
-            }
+        limiter.pace(tx_size).await;
+        if initial_tx_speed == 0 && seq % 64 == 0 {
+            tokio::task::yield_now().await;
         }
     }
 }
@@ -477,7 +458,10 @@ async fn udp_client_status_loop(
                 let server_status = StatusMessage::deserialize(&status_buf);
                 state.remote_cpu.store(server_status.cpu_load, Ordering::Relaxed);
 
-                if server_status.bytes_received > 0 && cmd.client_tx() {
+                if server_status.bytes_received > 0
+                    && cmd.client_tx()
+                    && cmd.local_tx_speed == 0
+                {
                     let new_speed =
                         ((server_status.bytes_received as u64 * 8 * 3) / 2) as u32;
                     state.tx_speed.store(new_speed, Ordering::Relaxed);

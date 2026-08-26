@@ -47,20 +47,20 @@ This causes the first 2-3 seconds of UDP tests to be unreliable on macOS. On Lin
 
 **Workaround:** Ignore the first few seconds of results, or use TCP mode which does not have this issue.
 
-## Windows Binaries Not Tested
+## Windows Runtime Coverage
 
-**Severity:** Unknown
+**Severity:** Informational
 **Affects:** Windows x86_64
-**Status:** Untested
+**Status:** Tested
 
-Windows binaries are cross-compiled from Linux using `gcc-mingw-w64` in CI. They have never been tested on actual Windows systems. Issues may include:
+Windows x86_64 was tested on an actual Windows 11 system. The native binary passed:
 
-- Socket behavior differences (Winsock vs BSD sockets)
-- IPv6 dual-stack handling
-- Path separator issues in CSV output
-- Console output encoding
+- IPv4 and IPv6 loopback tests over TCP and UDP in transmit, receive, and bidirectional modes
+- Four concurrent client sessions
+- CSV output to a path containing spaces and Cyrillic characters
+- Public IPv4 TCP and UDP tests against MikroTik RouterOS 7.20.2
 
-**Help wanted:** If you test on Windows, please report your findings.
+The Windows timer granularity exposed a pacing bug that caused UDP to severely undershoot configured rates. This is fixed by the shared timeline rate limiter described below. IPv6 interoperability with a physical or virtual RouterOS peer still needs testing.
 
 ## EC-SRP5 Server Authentication — Occasional Failure
 
@@ -90,13 +90,13 @@ The original C btest-opensource server exhibits the same behavior. Single-connec
 
 With TCP multi-connection, the server correctly handles all connections and data flows, but bandwidth is only measured on the primary connection's status loop. MikroTik may show lower-than-actual speeds because status messages are not distributed across all connections.
 
-## Bandwidth Limit (`-b`) Not Fully Effective
+## Bandwidth Limit (`-b`)
 
 **Severity:** Low
 **Affects:** Client mode, `-b` flag
-**Status:** Open
+**Status:** Fixed
 
-The `-b` bandwidth limit flag does not reliably cap speed. The `calc_send_interval` function computes the inter-packet delay correctly, but tokio's timer resolution and task scheduling can cause actual throughput to exceed the specified limit, especially for high bandwidth values.
+Bandwidth pacing uses a shared session timeline. Small UDP intervals are batched so coarse Windows timers do not reduce throughput, and TCP multi-connection tests share one aggregate limit instead of applying the full rate to every stream. Explicit limits are no longer overwritten by adaptive feedback, and one-way client modes map `-b` to the actual sender.
 
 ---
 
@@ -118,7 +118,7 @@ Found a bug or unexpected behavior? Please report it:
 | Linux (x86_64) | Pass | Pass | Pass | Untested | Deployed on Ubuntu 24.04 |
 | Linux (aarch64) | Untested | Untested | Untested | Untested | RPi builds available |
 | Linux (armv7) | Untested | Untested | Untested | Untested | RPi builds available |
-| Windows (x86_64) | Untested | Untested | Untested | Untested | Cross-compiled, never tested |
+| Windows (x86_64) | Pass | Pass | Untested | Untested | TCP6/UDP6 loopback pass; RouterOS IPv6 peer not yet tested |
 
 **Pass** = verified against MikroTik RouterOS 7.x
 **Fail** = known issue documented above

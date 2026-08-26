@@ -162,8 +162,8 @@ async fn main() -> anyhow::Result<()> {
 
         // For client: local_tx_speed controls upload, remote_tx_speed controls download
         let (tx_speed, rx_speed) = match direction {
-            CMD_DIR_TX => (bw, 0),
-            CMD_DIR_RX => (0, bw),
+            CMD_DIR_TX => (0, bw),
+            CMD_DIR_RX => (bw, 0),
             CMD_DIR_BOTH => (bw, bw),
             _ => (0, 0),
         };
