@@ -59,17 +59,43 @@ impl BandwidthState {
     #[inline]
     pub fn spend_budget(&self, amount: u64) -> bool {
         use std::sync::atomic::Ordering::{Relaxed, SeqCst};
-        // Fast path: unlimited budget (non-pro server)
-        let current = self.byte_budget.load(Relaxed);
-        if current == u64::MAX {
-            return true;
+        let mut current = self.byte_budget.load(Relaxed);
+        loop {
+            // Fast path: unlimited budget (non-pro server).
+            if current == u64::MAX {
+                return true;
+            }
+            if current < amount {
+                self.running.store(false, SeqCst);
+                return false;
+            }
+
+            // Multiple TX/RX tasks share the same budget. A load followed by
+            // fetch_sub can underflow when tasks race; compare_exchange makes
+            // reservation atomic and guarantees the configured cap.
+            match self.byte_budget.compare_exchange_weak(
+                current,
+                current - amount,
+                Relaxed,
+                Relaxed,
+            ) {
+                Ok(_) => return true,
+                Err(actual) => current = actual,
+            }
         }
-        if current < amount {
-            self.running.store(false, SeqCst);
-            return false;
+    }
+
+    /// Return an unused portion of a previously reserved byte budget.
+    ///
+    /// This is used by cancellation-safe TCP writes: a task reserves the
+    /// maximum write size, then refunds bytes that were not actually written.
+    #[inline]
+    pub fn refund_budget(&self, amount: u64) {
+        use std::sync::atomic::Ordering::Relaxed;
+        if amount == 0 || self.byte_budget.load(Relaxed) == u64::MAX {
+            return;
         }
-        self.byte_budget.fetch_sub(amount, Relaxed);
-        true
+        self.byte_budget.fetch_add(amount, Relaxed);
     }
 
     /// Set the byte budget (total bytes allowed for the entire test).
@@ -259,5 +285,29 @@ mod tests {
         assert_eq!(format_bandwidth(100_000_000.0), "100.00 Mbps");
         assert_eq!(format_bandwidth(1_500_000_000.0), "1.50 Gbps");
         assert_eq!(format_bandwidth(500_000.0), "500.00 Kbps");
+    }
+
+    #[test]
+    fn concurrent_budget_spending_never_underflows() {
+        let state = BandwidthState::new();
+        state.byte_budget.store(10_000, std::sync::atomic::Ordering::Relaxed);
+
+        let successes = std::sync::Arc::new(AtomicU64::new(0));
+        let mut workers = Vec::new();
+        for _ in 0..8 {
+            let state = state.clone();
+            let successes = successes.clone();
+            workers.push(std::thread::spawn(move || {
+                while state.spend_budget(1) {
+                    successes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }));
+        }
+        for worker in workers {
+            worker.join().unwrap();
+        }
+
+        assert_eq!(successes.load(std::sync::atomic::Ordering::Relaxed), 10_000);
+        assert_eq!(state.byte_budget.load(std::sync::atomic::Ordering::Relaxed), 0);
     }
 }

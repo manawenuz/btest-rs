@@ -11,9 +11,7 @@ set -euo pipefail
 ###############################################################################
 # Package metadata
 ###############################################################################
-PKG_NAME="btest-rs"
-PKG_VERSION="0.6.0"
-PKG_ARCH="amd64"
+PKG_NAME="${PKG_NAME:-btest-rs}"
 PKG_MAINTAINER="Siavash Sameni <manwe@manko.yoga>"
 PKG_DESCRIPTION="MikroTik Bandwidth Test (btest) server and client with EC-SRP5 auth"
 PKG_HOMEPAGE="https://github.com/manawenuz/btest-rs"
@@ -26,6 +24,9 @@ PKG_PRIORITY="optional"
 ###############################################################################
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+UPSTREAM_VERSION="$(sed -n 's/^version = "\([^"]*\)".*/\1/p' "$REPO_ROOT/Cargo.toml" | head -1 | tr -d '\r')"
+PKG_VERSION="${PKG_VERSION:-${UPSTREAM_VERSION}-1}"
+PKG_ARCH="${PKG_ARCH:-$(dpkg --print-architecture)}"
 
 # Locate the pre-built binary
 if [[ -n "${BTEST_BIN:-}" ]]; then
@@ -48,6 +49,12 @@ fi
 
 echo "==> Using binary: $BTEST_BIN"
 
+if file "$BTEST_BIN" | grep -q 'statically linked'; then
+    DEPENDS_LINE=""
+else
+    DEPENDS_LINE="Depends: libc6 (>= 2.34)"
+fi
+
 ###############################################################################
 # Prepare staging tree
 ###############################################################################
@@ -68,7 +75,17 @@ else
     echo "Warning: docs/man/btest.1 not found -- skipping man page"
 fi
 
-# systemd service unit
+# Runtime configuration and systemd service unit
+install -d "$STAGE/etc/default"
+cat > "$STAGE/etc/default/btest" <<'CONF'
+# Extra arguments for the btest server.
+# Examples:
+# BTEST_ARGS="-a btest -p change-me --ecsrp5"
+# BTEST_ARGS="--listen 0.0.0.0 --listen6 :: -v"
+BTEST_ARGS=""
+CONF
+chmod 600 "$STAGE/etc/default/btest"
+
 install -d "$STAGE/usr/lib/systemd/system"
 cat > "$STAGE/usr/lib/systemd/system/btest.service" <<'UNIT'
 [Unit]
@@ -78,7 +95,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/btest -s
+EnvironmentFile=-/etc/default/btest
+ExecStart=/usr/bin/btest -s $BTEST_ARGS
 Restart=always
 RestartSec=5
 DynamicUser=yes
@@ -133,6 +151,7 @@ Installed-Size: $INSTALLED_SIZE
 Section: $PKG_SECTION
 Priority: $PKG_PRIORITY
 Homepage: $PKG_HOMEPAGE
+$DEPENDS_LINE
 Description: $PKG_DESCRIPTION
  A high-performance Rust implementation of the MikroTik Bandwidth Test
  protocol, supporting both server and client modes with EC-SRP5
@@ -141,10 +160,10 @@ Description: $PKG_DESCRIPTION
 CTRL
 
 ###############################################################################
-# DEBIAN/conffiles  (mark the systemd unit as a conffile)
+# DEBIAN/conffiles
 ###############################################################################
 cat > "$STAGE/DEBIAN/conffiles" <<'CF'
-/usr/lib/systemd/system/btest.service
+/etc/default/btest
 CF
 
 ###############################################################################
@@ -159,7 +178,8 @@ if [ "$1" = "configure" ]; then
     if command -v systemctl >/dev/null 2>&1; then
         systemctl daemon-reload || true
         echo ""
-        echo "btest-rs installed.  To start the server:"
+        echo "btest-rs installed. Configure /etc/default/btest if needed."
+        echo "To start the server:"
         echo "  sudo systemctl enable --now btest.service"
         echo ""
     fi

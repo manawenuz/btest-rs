@@ -198,7 +198,11 @@ async fn tcp_client_rx_loop(
 ) {
     let mut buf = vec![0u8; 256 * 1024];
     while state.running.load(Ordering::Relaxed) {
-        match reader.read(&mut buf).await {
+        let result = tokio::select! {
+            result = reader.read(&mut buf) => result,
+            _ = tokio::time::sleep(Duration::from_millis(100)) => continue,
+        };
+        match result {
             Ok(0) | Err(_) => break,
             Ok(n) => {
                 state.rx_bytes.fetch_add(n as u64, Ordering::Relaxed);
@@ -228,12 +232,25 @@ async fn tcp_client_status_reader(
     mut reader: tokio::net::tcp::OwnedReadHalf,
     state: Arc<BandwidthState>,
 ) {
-    let mut buf = [0u8; STATUS_MSG_SIZE];
+    let mut buf = [0u8; 4096];
+    let mut pending = Vec::with_capacity(4096 + STATUS_MSG_SIZE);
     while state.running.load(Ordering::Relaxed) {
-        match reader.read_exact(&mut buf).await {
-            Ok(_) => {
-                if buf[0] == STATUS_MSG_TYPE && buf[1] >= 0x80 {
-                    let status = StatusMessage::deserialize(&buf);
+        let result = tokio::select! {
+            result = reader.read(&mut buf) => result,
+            _ = tokio::time::sleep(Duration::from_millis(100)) => continue,
+        };
+        match result {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                pending.extend_from_slice(&buf[..n]);
+                while pending.len() >= STATUS_MSG_SIZE {
+                    let mut frame = [0u8; STATUS_MSG_SIZE];
+                    frame.copy_from_slice(&pending[..STATUS_MSG_SIZE]);
+                    pending.drain(..STATUS_MSG_SIZE);
+                    if frame[0] != STATUS_MSG_TYPE || frame[1] < 0x80 {
+                        continue;
+                    }
+                    let status = StatusMessage::deserialize(&frame);
                     state.remote_cpu.store(status.cpu_load, Ordering::Relaxed);
                     // Use server's bytes_received for TX speed adaptation
                     if status.bytes_received > 0 {
@@ -244,7 +261,6 @@ async fn tcp_client_status_reader(
                     }
                 }
             }
-            Err(_) => break,
         }
     }
 }
@@ -424,7 +440,12 @@ async fn client_status_loop(cmd: &Command, state: &BandwidthState) {
     let mut interval = tokio::time::interval(Duration::from_secs(1));
 
     loop {
-        interval.tick().await;
+        if tokio::time::timeout(Duration::from_millis(100), interval.tick()).await.is_err() {
+            if !state.running.load(Ordering::Relaxed) {
+                break;
+            }
+            continue;
+        }
         if !state.running.load(Ordering::Relaxed) {
             break;
         }

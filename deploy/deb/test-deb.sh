@@ -53,6 +53,7 @@ docker run --rm \
         echo '--- Checking installed files ---'
         test -x /usr/bin/btest
         test -f /usr/lib/systemd/system/btest.service
+        test -f /etc/default/btest
         test -f /usr/share/doc/btest-rs/README.md
         test -f /usr/share/licenses/btest-rs/LICENSE
 
@@ -79,10 +80,11 @@ docker run --rm \
         sleep 1
 
         # Run a short TCP test against localhost
-        if btest -c 127.0.0.1 -d 2 2>&1; then
+        if btest -c 127.0.0.1 -r -d 2 2>&1; then
             echo 'Loopback TCP test passed.'
         else
-            echo 'Warning: loopback test returned non-zero (may be expected in container).'
+            echo 'Loopback TCP test failed.'
+            exit 1
         fi
 
         # Tear down

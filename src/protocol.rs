@@ -6,6 +6,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub const BTEST_PORT: u16 = 2000;
 pub const BTEST_UDP_PORT_START: u16 = 2001;
+pub const BTEST_UDP_PORT_COUNT: u16 = 100;
 pub const BTEST_PORT_CLIENT_OFFSET: u16 = 256;
 
 pub const CMD_PROTO_UDP: u8 = 0x00;
