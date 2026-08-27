@@ -53,11 +53,13 @@ docker run --rm \
         echo '--- Checking installed files ---'
         test -x /usr/bin/btest
         test -f /usr/lib/systemd/system/btest.service
-        test -f /usr/share/doc/btest-rs/README.md
+        grep -q -- '--listen6' /usr/lib/systemd/system/btest.service
+        # Ubuntu's container image excludes most /usr/share/doc files while
+        # unpacking. Verify README.md in the package payload instead.
+        dpkg-deb -c /tmp/$DEB_FILE > /tmp/btest-package.contents
+        grep -q './usr/share/doc/btest-rs/README.md' /tmp/btest-package.contents
+        grep -q './usr/share/man/man1/btest.1.gz' /tmp/btest-package.contents
         test -f /usr/share/licenses/btest-rs/LICENSE
-
-        # Man page (may be gzipped)
-        test -f /usr/share/man/man1/btest.1.gz || test -f /usr/share/man/man1/btest.1
         echo 'All expected files present.'
 
         ###################################################################
@@ -74,15 +76,23 @@ docker run --rm \
         echo '--- Loopback smoke test ---'
 
         # Start server in background
-        btest -s &
+        btest -s --listen6 &
         SERVER_PID=\$!
         sleep 1
 
         # Run a short TCP test against localhost
-        if btest -c 127.0.0.1 -d 2 2>&1; then
+        if btest -c 127.0.0.1 -t -d 2 2>&1; then
             echo 'Loopback TCP test passed.'
         else
-            echo 'Warning: loopback test returned non-zero (may be expected in container).'
+            echo 'IPv4 loopback TCP test failed.' >&2
+            exit 1
+        fi
+
+        if btest -c ::1 -t -d 2 2>&1; then
+            echo 'IPv6 loopback TCP test passed.'
+        else
+            echo 'IPv6 loopback TCP test failed.' >&2
+            exit 1
         fi
 
         # Tear down

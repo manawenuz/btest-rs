@@ -18,6 +18,10 @@ struct Cli {
     #[arg(long = "listen", default_value = "0.0.0.0")]
     listen_addr: String,
 
+    /// Enable IPv6 listener, optionally on a specific address
+    #[arg(long = "listen6", default_missing_value = "::", num_args = 0..=1)]
+    listen6_addr: Option<String>,
+
     /// Username
     #[arg(short = 'a', long = "authuser")]
     auth_user: Option<String>,
@@ -55,8 +59,9 @@ async fn main() -> anyhow::Result<()> {
     btest_rs::cpu::start_sampler();
 
     let v4 = if cli.listen_addr.eq_ignore_ascii_case("none") { None } else { Some(cli.listen_addr) };
+    let v6 = cli.listen6_addr;
 
     tracing::info!("btest-server starting on port {}", cli.port);
-    btest_rs::server::run_server(cli.port, cli.auth_user, cli.auth_pass, cli.ecsrp5, v4, None).await?;
+    btest_rs::server::run_server(cli.port, cli.auth_user, cli.auth_pass, cli.ecsrp5, v4, v6).await?;
     Ok(())
 }

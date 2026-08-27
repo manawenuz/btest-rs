@@ -23,13 +23,31 @@ When running as a server on macOS and a MikroTik client connects over IPv6 UDP, 
 - IPv6 TCP (all directions, all platforms)
 - Client mode over IPv6 (connecting TO a MikroTik server works fine at 600+ Mbps)
 
-## IPv6 UDP — Not Tested on Linux
+## IPv6 UDP on Linux
 
-**Severity:** Unknown
+**Severity:** Informational
 **Affects:** Linux server, IPv6, UDP
-**Status:** Untested
+**Status:** Tested
 
-IPv6 UDP in server mode has not been thoroughly tested on Linux. The macOS ENOBUFS issue is kernel-specific and likely does not exist on Linux (which has much better IPv6 UDP buffer management). Testing and reports welcome.
+Linux server mode was verified over IPv6 against RouterOS 7.20.2 and 7.24.1 in transmit, receive, and bidirectional modes. A 100 Mbps bidirectional test sustained the configured rate in both directions without packet loss after the rate-limiter fix.
+
+## RouterOS Client IPv6 Firewall
+
+**Severity:** Informational
+**Affects:** RouterOS acting as the client, UDP receive/both
+**Status:** Configuration requirement
+
+The UDP data connection is separate from the TCP control connection. When RouterOS requests `direction=receive` or `direction=both`, server traffic arrives as a new IPv6 UDP flow on client ports 2257 and above. A typical IPv6 input policy that accepts only established/related traffic and then drops everything else will discard the data while the TCP status exchange continues. RouterOS then displays RX 0 bps, while transmit may still work normally.
+
+Permit the server's exact IPv6 address to the btest client UDP range before the final input drop. For example, replace the address and rule number to match the deployment:
+
+```routeros
+/ipv6 firewall filter add chain=input action=accept protocol=udp \
+    src-address=2001:db8::10/128 dst-port=2257-2356 \
+    place-before=<final-input-drop-rule> comment="Allow btest UDP6 from server"
+```
+
+Packet capture confirmation: packets reach the RouterOS interface and the final input-drop counter increments, but the bandwidth-test RX counter stays at zero. This behavior was reproduced on RouterOS 7.20.2 and resolved immediately by a source-restricted allow rule; it is not a RouterOS version regression.
 
 ## macOS UDP Send Buffer Saturation
 
@@ -115,7 +133,7 @@ Found a bug or unexpected behavior? Please report it:
 |----------|------|------|------|------|-------|
 | macOS (ARM64) | Pass | Pass* | Pass | Fail** | *UDP send buffer saturation on first seconds |
 | macOS (x86_64) | Untested | Untested | Untested | Untested | |
-| Linux (x86_64) | Pass | Pass | Pass | Untested | Deployed on Ubuntu 24.04 |
+| Linux (x86_64) | Pass | Pass | Pass | Pass | UDP6 verified against RouterOS 7.20.2 and 7.24.1 |
 | Linux (aarch64) | Untested | Untested | Untested | Untested | RPi builds available |
 | Linux (armv7) | Untested | Untested | Untested | Untested | RPi builds available |
 | Windows (x86_64) | Untested | Untested | Untested | Untested | Cross-compiled, never tested |

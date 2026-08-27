@@ -140,6 +140,9 @@ MikroTik devices connect to this server to run bandwidth tests.
 # No authentication
 btest -s
 
+# Dual-stack IPv4 + IPv6
+btest -s --listen6
+
 # MD5 authentication (legacy RouterOS)
 btest -s -a admin -p password
 
@@ -266,7 +269,8 @@ See [KNOWN_ISSUES.md](KNOWN_ISSUES.md) for the full list including:
 - **IPv6 UDP on macOS** — server TX hits ENOBUFS, use IPv4 or deploy on Linux
 - **macOS UDP send buffer** — first 2-3 seconds unreliable on unlimited speed tests
 - **Windows binaries** — cross-compiled but untested
-- **IPv6 UDP on Linux** — untested, likely works fine
+- **RouterOS IPv6 firewall** — UDP receive/both requires input access to client ports 2257+
+- **IPv6 UDP on Linux** — verified against RouterOS 7.20.2 and 7.24.1
 
 Contributions and bug reports welcome:
 - https://github.com/manawenuz/btest-rs/issues

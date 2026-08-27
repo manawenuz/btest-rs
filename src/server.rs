@@ -4,6 +4,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use socket2::{Domain, Protocol, Socket, Type};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::Mutex;
@@ -21,6 +22,20 @@ struct TcpSession {
 }
 
 type SessionMap = Arc<Mutex<HashMap<u16, TcpSession>>>;
+
+/// Bind an IPv6-only listener so it can share a port with an IPv4 wildcard
+/// listener. Linux otherwise creates a dual-stack IPv6 socket by default and
+/// binding `[::]:PORT` after `0.0.0.0:PORT` fails with EADDRINUSE.
+fn bind_ipv6_listener(addr: SocketAddr) -> std::io::Result<TcpListener> {
+    let socket = Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP))?;
+    socket.set_only_v6(true)?;
+    socket.set_nonblocking(true)?;
+    socket.bind(&addr.into())?;
+    socket.listen(128)?;
+
+    let listener: std::net::TcpListener = socket.into();
+    TcpListener::from_std(listener)
+}
 
 pub async fn run_server(
     port: u16,
@@ -69,7 +84,12 @@ pub async fn run_server(
     // Bind IPv6 listener
     let v6_listener = if let Some(ref addr) = listen_v6 {
         let bind_addr = format!("[{}]:{}", addr, port);
-        match TcpListener::bind(&bind_addr).await {
+        let parsed_addr = bind_addr.parse::<SocketAddr>();
+        let listener = match parsed_addr {
+            Ok(addr) => bind_ipv6_listener(addr),
+            Err(e) => Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)),
+        };
+        match listener {
             Ok(l) => {
                 tracing::info!("Listening on {} (IPv6)", bind_addr);
                 Some(l)
@@ -121,6 +141,22 @@ pub async fn run_server(
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn ipv4_and_ipv6_wildcards_can_share_a_port() {
+        let v4 = TcpListener::bind("0.0.0.0:0").await.unwrap();
+        let port = v4.local_addr().unwrap().port();
+        let addr = SocketAddr::from((std::net::Ipv6Addr::UNSPECIFIED, port));
+
+        let v6 = bind_ipv6_listener(addr).unwrap();
+
+        assert_eq!(v6.local_addr().unwrap(), addr);
     }
 }
 
