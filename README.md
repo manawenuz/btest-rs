@@ -1,6 +1,6 @@
 # btest-rs
 
-A Rust reimplementation of the [MikroTik Bandwidth Test (btest)](https://wiki.mikrotik.com/wiki/Manual:Tools/Bandwidth_Test) protocol. Both server and client modes, fully compatible with MikroTik RouterOS devices.
+A Rust reimplementation of the [MikroTik Bandwidth Test (btest)](https://manual.mikrotik.com/docs/diagnostics-monitoring-and-troubleshooting/bandwidth-test) protocol. Both server and client modes, fully compatible with MikroTik RouterOS devices.
 
 ## Free Public Servers
 
