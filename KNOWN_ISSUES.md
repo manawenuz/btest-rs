@@ -84,11 +84,13 @@ The original C btest-opensource server exhibits the same behavior. Single-connec
 
 ## TCP Multi-Connection Bandwidth Reporting
 
-**Severity:** Low
 **Affects:** Server mode, TCP, `connection-count > 1`
-**Status:** Open
+**Status:** Fixed
 
-With TCP multi-connection, the server correctly handles all connections and data flows, but bandwidth is only measured on the primary connection's status loop. MikroTik may show lower-than-actual speeds because status messages are not distributed across all connections.
+TCP wire status messages now report the whole session using independent cursors
+into cumulative byte totals. Local reporting no longer resets counters consumed
+by another stream, duplicates received bytes, or multiplies the test duration by
+the number of reporting tasks. Final TCP summaries use elapsed wall-clock time.
 
 ## Bandwidth Limit (`-b`) Not Fully Effective
 
