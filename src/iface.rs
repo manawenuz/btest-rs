@@ -162,7 +162,7 @@ pub fn pin_fd(fd: std::os::fd::RawFd, spec: &IfaceSpec, ipv6: bool) -> std::io::
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         if let Some(name) = &spec.ifname {
-            return pin_linux(fd, name);
+            return pin_linux(fd, name, ipv6);
         }
         return Ok(());
     }
@@ -186,7 +186,7 @@ pub fn pin_fd(fd: std::os::fd::RawFd, spec: &IfaceSpec, ipv6: bool) -> std::io::
 }
 
 #[cfg(all(unix, any(target_os = "linux", target_os = "android")))]
-fn pin_linux(fd: std::os::fd::RawFd, name: &str) -> std::io::Result<()> {
+fn pin_linux(fd: std::os::fd::RawFd, name: &str, ipv6: bool) -> std::io::Result<()> {
     let mut buf = name.as_bytes().to_vec();
     if buf.last() != Some(&0) {
         buf.push(0);
@@ -201,7 +201,10 @@ fn pin_linux(fd: std::os::fd::RawFd, name: &str) -> std::io::Result<()> {
         )
     };
     if rc == 0 {
-        tracing::debug!("pinned socket to device {name}");
+        tracing::debug!(
+            "pinned socket to device {name} ({})",
+            if ipv6 { "IPv6" } else { "IPv4" }
+        );
         return Ok(());
     }
     let err = std::io::Error::last_os_error();
