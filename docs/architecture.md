@@ -15,6 +15,7 @@ src/
 ├── ecsrp5.rs            # EC-SRP5 authentication (Curve25519 Weierstrass)
 ├── server.rs            # Server mode: listener, TCP/UDP handlers, multi-conn
 ├── client.rs            # Client mode: connector, TCP/UDP handlers, status parsing
+├── iface.rs             # Client --interface: resolve name or local address, pin device
 ├── bandwidth.rs         # Rate limiting, formatting, shared BandwidthState, byte budget
 ├── cpu.rs               # CPU sampler (macOS, Linux, Android, Windows, FreeBSD)
 ├── csv_output.rs        # CSV result logging (append-mode, auto-header)

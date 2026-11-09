@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -8,8 +8,12 @@ use tokio::net::{TcpStream, UdpSocket};
 
 use crate::auth;
 use crate::bandwidth::{self, BandwidthState};
+use crate::iface::IfaceSpec;
 use crate::protocol::*;
 
+// The `btest` binary calls `run_client_bound` and compiles this module itself,
+// so without this attribute the binary crate warns that the wrapper is unused.
+#[allow(dead_code)]
 pub async fn run_client(
     host: &str,
     port: u16,
@@ -22,20 +26,53 @@ pub async fn run_client(
     nat_mode: bool,
     shared_state: Arc<BandwidthState>,
 ) -> Result<()> {
-    let addr = format!("{}:{}", host, port);
-    tracing::info!("Connecting to {}...", addr);
-    let mut stream = TcpStream::connect(&addr).await?;
-    stream.set_nodelay(true)?;
+    run_client_bound(
+        host,
+        port,
+        direction,
+        use_udp,
+        tx_speed,
+        rx_speed,
+        auth_user,
+        auth_pass,
+        nat_mode,
+        shared_state,
+        None,
+    )
+    .await
+}
 
-    // Set TCP socket buffers to 4MB for high throughput
-    let sock_ref = socket2::SockRef::from(&stream);
-    let _ = sock_ref.set_send_buffer_size(4 * 1024 * 1024);
-    let _ = sock_ref.set_recv_buffer_size(4 * 1024 * 1024);
+/// Client entry point that pins TCP and UDP sockets to `interface`.
+///
+/// `interface` is an interface name (`eth0`, `en0`) or a local address
+/// (`10.0.0.5`). `None` keeps the kernel's default route.
+pub async fn run_client_bound(
+    host: &str,
+    port: u16,
+    direction: u8,
+    use_udp: bool,
+    tx_speed: u32,
+    rx_speed: u32,
+    auth_user: Option<String>,
+    auth_pass: Option<String>,
+    nat_mode: bool,
+    shared_state: Arc<BandwidthState>,
+    interface: Option<&str>,
+) -> Result<()> {
+    let spec = match interface {
+        Some(name) => Some(IfaceSpec::parse(name)?),
+        None => None,
+    };
+    let mut stream = connect_control(host, port, spec.as_ref()).await?;
 
     recv_hello(&mut stream).await?;
     tracing::info!("Connected to server");
 
-    let proto = if use_udp { CMD_PROTO_UDP } else { CMD_PROTO_TCP };
+    let proto = if use_udp {
+        CMD_PROTO_UDP
+    } else {
+        CMD_PROTO_TCP
+    };
     let mut cmd = Command::new(proto, direction);
     cmd.local_tx_speed = tx_speed;
     cmd.remote_tx_speed = rx_speed;
@@ -96,15 +133,122 @@ pub async fn run_client(
     );
 
     if use_udp {
-        run_udp_test_client(&mut stream, host, &cmd, nat_mode, shared_state).await
+        let peer_ip = stream.peer_addr()?.ip();
+        let local_ip = if spec.is_some() {
+            Some(stream.local_addr()?.ip())
+        } else {
+            None
+        };
+        run_udp_test_client(
+            &mut stream,
+            peer_ip,
+            local_ip,
+            spec.as_ref(),
+            &cmd,
+            nat_mode,
+            shared_state,
+        )
+        .await
     } else {
         run_tcp_test_client(stream, cmd, shared_state).await
     }
 }
 
+fn host_with_port(host: &str, port: u16) -> String {
+    if host.starts_with('[') && host.ends_with(']') {
+        format!("{host}:{port}")
+    } else if host.contains(':') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
+}
+
+fn tune_tcp(stream: &TcpStream) {
+    let sock_ref = socket2::SockRef::from(stream);
+    let _ = sock_ref.set_send_buffer_size(4 * 1024 * 1024);
+    let _ = sock_ref.set_recv_buffer_size(4 * 1024 * 1024);
+}
+
+async fn connect_control(host: &str, port: u16, spec: Option<&IfaceSpec>) -> Result<TcpStream> {
+    let addr = host_with_port(host, port);
+    let Some(spec) = spec else {
+        tracing::info!("Connecting to {addr}...");
+        let stream = TcpStream::connect(&addr).await?;
+        stream.set_nodelay(true)?;
+        tune_tcp(&stream);
+        return Ok(stream);
+    };
+
+    let remotes: Vec<SocketAddr> = tokio::net::lookup_host(&addr).await?.collect();
+    if remotes.is_empty() {
+        return Err(BtestError::Protocol(format!("could not resolve {host}")));
+    }
+    let matched: Vec<SocketAddr> = remotes
+        .iter()
+        .copied()
+        .filter(|remote| spec.supports(remote.is_ipv6()))
+        .collect();
+    if matched.is_empty() {
+        let want_v6 = remotes.iter().all(|remote| remote.is_ipv6());
+        let want_v4 = remotes.iter().all(|remote| remote.is_ipv4());
+        if want_v4 || want_v6 {
+            return Err(spec.local_ip_for(want_v6).unwrap_err());
+        }
+        return Err(BtestError::Protocol(format!(
+            "interface {} has no address matching {host} (IPv4/IPv6)",
+            spec.requested
+        )));
+    }
+
+    let mut last_err: Option<BtestError> = None;
+    for remote in matched {
+        let local_ip = spec.local_ip_for(remote.is_ipv6())?;
+        match connect_bound(remote, local_ip, spec).await {
+            Ok(stream) => return Ok(stream),
+            Err(e) => {
+                tracing::debug!("connect to {remote} from {local_ip} failed: {e}");
+                last_err = Some(e);
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| BtestError::Protocol(format!("could not connect to {host}"))))
+}
+
+async fn connect_bound(
+    remote: SocketAddr,
+    local_ip: IpAddr,
+    spec: &IfaceSpec,
+) -> Result<TcpStream> {
+    let socket = if remote.is_ipv6() {
+        tokio::net::TcpSocket::new_v6()?
+    } else {
+        tokio::net::TcpSocket::new_v4()?
+    };
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        crate::iface::pin_fd(socket.as_raw_fd(), spec, remote.is_ipv6())?;
+    }
+    let local = SocketAddr::new(local_ip, 0);
+    socket.bind(local)?;
+    tracing::info!(
+        "Connecting to {remote} from {local_ip} ({})",
+        spec.requested
+    );
+    let stream = socket.connect(remote).await?;
+    stream.set_nodelay(true)?;
+    tune_tcp(&stream);
+    Ok(stream)
+}
+
 // --- TCP Test Client ---
 
-async fn run_tcp_test_client(stream: TcpStream, cmd: Command, state: Arc<BandwidthState>) -> Result<()> {
+async fn run_tcp_test_client(
+    stream: TcpStream,
+    cmd: Command,
+    state: Arc<BandwidthState>,
+) -> Result<()> {
     let tx_size = cmd.tx_size as usize;
     let client_should_tx = cmd.client_tx();
     let client_should_rx = cmd.client_rx();
@@ -146,8 +290,12 @@ async fn run_tcp_test_client(stream: TcpStream, cmd: Command, state: Arc<Bandwid
     client_status_loop(&cmd, &state).await;
 
     state.running.store(false, Ordering::SeqCst);
-    if let Some(h) = tx_handle { let _ = h.await; }
-    if let Some(h) = rx_handle { let _ = h.await; }
+    if let Some(h) = tx_handle {
+        let _ = h.await;
+    }
+    if let Some(h) = rx_handle {
+        let _ = h.await;
+    }
     Ok(())
 }
 
@@ -161,7 +309,11 @@ async fn tcp_client_tx_loop(
 
     let mut interval = bandwidth::calc_send_interval(tx_speed, tx_size as u16);
     // Use larger writes when running unlimited to reduce syscall overhead
-    let effective_size = if interval.is_none() { tx_size.max(256 * 1024) } else { tx_size };
+    let effective_size = if interval.is_none() {
+        tx_size.max(256 * 1024)
+    } else {
+        tx_size
+    };
     let packet = vec![0u8; effective_size]; // TCP data is all zeros
     let mut next_send = Instant::now();
 
@@ -169,7 +321,9 @@ async fn tcp_client_tx_loop(
         if writer.write_all(&packet).await.is_err() {
             break;
         }
-        state.tx_bytes.fetch_add(effective_size as u64, Ordering::Relaxed);
+        state
+            .tx_bytes
+            .fetch_add(effective_size as u64, Ordering::Relaxed);
 
         if state.tx_speed_changed.load(Ordering::Relaxed) {
             state.tx_speed_changed.store(false, Ordering::Relaxed);
@@ -237,8 +391,7 @@ async fn tcp_client_status_reader(
                     state.remote_cpu.store(status.cpu_load, Ordering::Relaxed);
                     // Use server's bytes_received for TX speed adaptation
                     if status.bytes_received > 0 {
-                        let new_speed =
-                            ((status.bytes_received as u64 * 8 * 3) / 2) as u32;
+                        let new_speed = ((status.bytes_received as u64 * 8 * 3) / 2) as u32;
                         state.tx_speed.store(new_speed, Ordering::Relaxed);
                         state.tx_speed_changed.store(true, Ordering::Relaxed);
                     }
@@ -253,7 +406,9 @@ async fn tcp_client_status_reader(
 
 async fn run_udp_test_client(
     stream: &mut TcpStream,
-    host: &str,
+    peer_ip: IpAddr,
+    local_ip: Option<IpAddr>,
+    spec: Option<&IfaceSpec>,
     cmd: &Command,
     nat_mode: bool,
     state: Arc<BandwidthState>,
@@ -265,22 +420,19 @@ async fn run_udp_test_client(
 
     tracing::info!(
         "UDP ports: server={}, client={}",
-        server_udp_port, client_udp_port,
+        server_udp_port,
+        client_udp_port,
     );
 
-    // Detect IPv6 from the host address
-    let is_ipv6 = host.contains(':');
-    let bind_addr: SocketAddr = if is_ipv6 {
-        format!("[::]:{}",  client_udp_port).parse().unwrap()
+    let is_ipv6 = peer_ip.is_ipv6();
+    let bind_ip = local_ip.unwrap_or(if is_ipv6 {
+        IpAddr::V6(Ipv6Addr::UNSPECIFIED)
     } else {
-        format!("0.0.0.0:{}", client_udp_port).parse().unwrap()
-    };
-    let udp = UdpSocket::bind(bind_addr).await?;
-    let server_udp_addr = if is_ipv6 {
-        SocketAddr::new(host.parse().unwrap(), server_udp_port)
-    } else {
-        format!("{}:{}", host, server_udp_port).parse().unwrap()
-    };
+        IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+    });
+    let bind_addr = SocketAddr::new(bind_ip, client_udp_port);
+    let udp = bind_udp_socket(bind_addr, spec)?;
+    let server_udp_addr = SocketAddr::new(peer_ip, server_udp_port);
     udp.connect(server_udp_addr).await?;
 
     if nat_mode {
@@ -317,9 +469,45 @@ async fn run_udp_test_client(
     udp_client_status_loop(stream, cmd, &state).await;
 
     state.running.store(false, Ordering::SeqCst);
-    if let Some(h) = tx_handle { let _ = h.await; }
-    if let Some(h) = rx_handle { let _ = h.await; }
+    if let Some(h) = tx_handle {
+        let _ = h.await;
+    }
+    if let Some(h) = rx_handle {
+        let _ = h.await;
+    }
     Ok(())
+}
+
+fn bind_udp_socket(bind_addr: SocketAddr, spec: Option<&IfaceSpec>) -> Result<UdpSocket> {
+    let ipv6 = bind_addr.is_ipv6();
+    let domain = if ipv6 {
+        socket2::Domain::IPV6
+    } else {
+        socket2::Domain::IPV4
+    };
+    let sock = socket2::Socket::new(domain, socket2::Type::DGRAM, Some(socket2::Protocol::UDP))?;
+    sock.set_nonblocking(true)?;
+    let _ = sock.set_send_buffer_size(4 * 1024 * 1024);
+    let _ = sock.set_recv_buffer_size(4 * 1024 * 1024);
+    if ipv6 {
+        let _ = sock.set_only_v6(true);
+    }
+    if let Some(spec) = spec {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            crate::iface::pin_fd(sock.as_raw_fd(), spec, ipv6)?;
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = spec;
+        }
+    }
+    sock.bind(&bind_addr.into())?;
+    if !bind_addr.ip().is_unspecified() {
+        tracing::info!("UDP socket bound to {bind_addr}");
+    }
+    Ok(UdpSocket::from_std(sock.into())?)
 }
 
 async fn udp_client_tx_loop(
@@ -353,7 +541,7 @@ async fn udp_client_tx_loop(
                     break;
                 }
                 let backoff = Duration::from_micros(
-                    (200 + consecutive_errors.min(5000) as u64 * 10).min(10000)
+                    (200 + consecutive_errors.min(5000) as u64 * 10).min(10000),
                 );
                 tokio::time::sleep(backoff).await;
                 continue;
@@ -365,8 +553,11 @@ async fn udp_client_tx_loop(
             let new_speed = state.tx_speed.load(Ordering::Relaxed);
             interval = bandwidth::calc_send_interval(new_speed, tx_size as u16);
             next_send = Instant::now();
-            tracing::debug!("TX speed adjusted to {} bps ({:.2} Mbps)",
-                new_speed, new_speed as f64 / 1_000_000.0);
+            tracing::debug!(
+                "TX speed adjusted to {} bps ({:.2} Mbps)",
+                new_speed,
+                new_speed as f64 / 1_000_000.0
+            );
         }
 
         match interval {
@@ -400,7 +591,9 @@ async fn udp_client_rx_loop(socket: &UdpSocket, state: Arc<BandwidthState>) {
                     let expected = last.wrapping_add(1);
                     if seq > expected {
                         let lost = seq - expected;
-                        state.rx_lost_packets.fetch_add(lost as u64, Ordering::Relaxed);
+                        state
+                            .rx_lost_packets
+                            .fetch_add(lost as u64, Ordering::Relaxed);
                     }
                 }
                 last_seq = Some(seq);
@@ -431,17 +624,41 @@ async fn client_status_loop(cmd: &Command, state: &BandwidthState) {
 
         seq += 1;
 
-        let tx = if cmd.client_tx() { state.tx_bytes.swap(0, Ordering::Relaxed) } else { 0 };
-        let rx = if cmd.client_rx() { state.rx_bytes.swap(0, Ordering::Relaxed) } else { 0 };
+        let tx = if cmd.client_tx() {
+            state.tx_bytes.swap(0, Ordering::Relaxed)
+        } else {
+            0
+        };
+        let rx = if cmd.client_rx() {
+            state.rx_bytes.swap(0, Ordering::Relaxed)
+        } else {
+            0
+        };
         state.record_interval(tx, rx, 0);
 
         let local_cpu = crate::cpu::get();
         let remote_cpu = state.remote_cpu.load(Ordering::Relaxed);
         if cmd.client_tx() {
-            bandwidth::print_status_with_cpu(seq, "TX", tx, Duration::from_secs(1), None, Some(local_cpu), Some(remote_cpu));
+            bandwidth::print_status_with_cpu(
+                seq,
+                "TX",
+                tx,
+                Duration::from_secs(1),
+                None,
+                Some(local_cpu),
+                Some(remote_cpu),
+            );
         }
         if cmd.client_rx() {
-            bandwidth::print_status_with_cpu(seq, "RX", rx, Duration::from_secs(1), None, Some(local_cpu), Some(remote_cpu));
+            bandwidth::print_status_with_cpu(
+                seq,
+                "RX",
+                rx,
+                Duration::from_secs(1),
+                None,
+                Some(local_cpu),
+                Some(remote_cpu),
+            );
         }
     }
 }
@@ -450,11 +667,7 @@ async fn client_status_loop(cmd: &Command, state: &BandwidthState) {
 ///   1. Wait up to 1 second for server status
 ///   2. Read and process if available
 ///   3. ALWAYS send our status
-async fn udp_client_status_loop(
-    stream: &mut TcpStream,
-    cmd: &Command,
-    state: &BandwidthState,
-) {
+async fn udp_client_status_loop(stream: &mut TcpStream, cmd: &Command, state: &BandwidthState) {
     let mut seq: u32 = 0;
     let (mut reader, mut writer) = tokio::io::split(stream);
     let mut status_buf = [0u8; STATUS_MSG_SIZE];
@@ -475,11 +688,12 @@ async fn udp_client_status_loop(
         match tokio::time::timeout(wait_time, reader.read_exact(&mut status_buf)).await {
             Ok(Ok(_)) => {
                 let server_status = StatusMessage::deserialize(&status_buf);
-                state.remote_cpu.store(server_status.cpu_load, Ordering::Relaxed);
+                state
+                    .remote_cpu
+                    .store(server_status.cpu_load, Ordering::Relaxed);
 
                 if server_status.bytes_received > 0 && cmd.client_tx() {
-                    let new_speed =
-                        ((server_status.bytes_received as u64 * 8 * 3) / 2) as u32;
+                    let new_speed = ((server_status.bytes_received as u64 * 8 * 3) / 2) as u32;
                     state.tx_speed.store(new_speed, Ordering::Relaxed);
                     state.tx_speed_changed.store(true, Ordering::Relaxed);
                     tracing::debug!(
@@ -509,7 +723,8 @@ async fn udp_client_status_loop(
         let lost = state.rx_lost_packets.swap(0, Ordering::Relaxed);
         state.record_interval(tx_bytes, rx_bytes, lost);
 
-        let status = StatusMessage { cpu_load: crate::cpu::get(),
+        let status = StatusMessage {
+            cpu_load: crate::cpu::get(),
             seq,
             bytes_received: rx_bytes as u32,
         };
@@ -522,10 +737,26 @@ async fn udp_client_status_loop(
         let local_cpu = crate::cpu::get();
         let remote_cpu = state.remote_cpu.load(Ordering::Relaxed);
         if cmd.client_tx() {
-            bandwidth::print_status_with_cpu(seq, "TX", tx_bytes, Duration::from_secs(1), None, Some(local_cpu), Some(remote_cpu));
+            bandwidth::print_status_with_cpu(
+                seq,
+                "TX",
+                tx_bytes,
+                Duration::from_secs(1),
+                None,
+                Some(local_cpu),
+                Some(remote_cpu),
+            );
         }
         if cmd.client_rx() {
-            bandwidth::print_status_with_cpu(seq, "RX", rx_bytes, Duration::from_secs(1), Some(lost), Some(local_cpu), Some(remote_cpu));
+            bandwidth::print_status_with_cpu(
+                seq,
+                "RX",
+                rx_bytes,
+                Duration::from_secs(1),
+                Some(lost),
+                Some(local_cpu),
+                Some(remote_cpu),
+            );
         }
     }
 }

@@ -8,7 +8,9 @@ async fn start_test_server(port: u16, auth_user: Option<&str>, auth_pass: Option
     let user = auth_user.map(String::from);
     let pass = auth_pass.map(String::from);
     tokio::spawn(async move {
-        let _ = btest_rs::server::run_server(port, user, pass, false, Some("127.0.0.1".into()), None).await;
+        let _ =
+            btest_rs::server::run_server(port, user, pass, false, Some("127.0.0.1".into()), None)
+                .await;
     });
     tokio::time::sleep(Duration::from_millis(100)).await;
 }
@@ -235,4 +237,117 @@ async fn test_loopback_tcp_with_auth() {
 
     tokio::time::sleep(Duration::from_secs(2)).await;
     handle.abort();
+}
+
+fn loopback_interface() -> &'static str {
+    if cfg!(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd"
+    )) {
+        "lo0"
+    } else {
+        "lo"
+    }
+}
+
+async fn assert_bound_client_runs(port: u16, interface: &str, udp: bool) {
+    let state = btest_rs::bandwidth::BandwidthState::new();
+    let state2 = state.clone();
+    let interface = interface.to_string();
+    let interface_for_task = interface.clone();
+    let handle = tokio::spawn(async move {
+        btest_rs::client::run_client_bound(
+            "127.0.0.1",
+            port,
+            btest_rs::protocol::CMD_DIR_TX,
+            udp,
+            0,
+            0,
+            None,
+            None,
+            false,
+            state2,
+            Some(&interface_for_task),
+        )
+        .await
+    });
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    if handle.is_finished() {
+        match handle.await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => panic!("client bound to {interface} failed: {e}"),
+            Err(e) => panic!("client task failed: {e}"),
+        }
+    } else {
+        state
+            .running
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
+    }
+}
+
+#[tokio::test]
+async fn test_client_bind_loopback_address() {
+    let port = SERVER_PORT + 30;
+    start_test_server(port, None, None).await;
+    assert_bound_client_runs(port, "127.0.0.1", false).await;
+}
+
+#[tokio::test]
+async fn test_client_bind_loopback_interface_udp() {
+    let port = SERVER_PORT + 31;
+    start_test_server(port, None, None).await;
+    assert_bound_client_runs(port, loopback_interface(), true).await;
+}
+
+#[tokio::test]
+async fn test_client_bind_unknown_interface() {
+    let err = btest_rs::client::run_client_bound(
+        "127.0.0.1",
+        1,
+        btest_rs::protocol::CMD_DIR_TX,
+        false,
+        0,
+        0,
+        None,
+        None,
+        false,
+        btest_rs::bandwidth::BandwidthState::new(),
+        Some("btest-no-such-iface"),
+    )
+    .await
+    .unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("not found") || msg.contains("not supported"),
+        "unexpected error: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn test_client_bind_family_mismatch() {
+    let err = btest_rs::client::run_client_bound(
+        "127.0.0.1",
+        1,
+        btest_rs::protocol::CMD_DIR_TX,
+        false,
+        0,
+        0,
+        None,
+        None,
+        false,
+        btest_rs::bandwidth::BandwidthState::new(),
+        Some("::1"),
+    )
+    .await
+    .unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("IPv6") || msg.contains("no address matching"),
+        "unexpected error: {msg}"
+    );
 }

@@ -71,6 +71,31 @@ Default is 0 (unlimited).
 .BI \-P " PORT" "\fR, \fP" \-\-port " PORT"
 TCP port to listen on in server mode or connect to in client mode.
 Default: 2000.
+.SS "Network Binding (client mode)"
+.TP
+.BI \-i " IFACE" "\fR, \fP" \-\-interface " IFACE"
+Bind client sockets to
+.IR IFACE .
+.I IFACE
+is an interface name
+.RB ( eth0 ", " en0 )
+or a local address on that interface
+.RB ( 10.0.0.5 ).
+The TCP control connection and the UDP data socket both use it, so the test
+leaves the chosen interface when the host has more than one. An interface
+name selects the first routable address of the destination's family on that
+interface. Pass a local address to pick one address when the interface has
+several. On Linux the socket is also pinned with
+.B SO_BINDTODEVICE
+(this needs
+.BR CAP_NET_RAW ;
+without it the client still binds the local address). On macOS the socket is
+pinned with
+.B IP_BOUND_IF
+or
+.BR IPV6_BOUND_IF .
+Requires
+.BR \-c .
 .SS "Network Binding (server mode)"
 .TP
 .BI \-\-listen " ADDR"
@@ -272,6 +297,15 @@ UDP receive through NAT:
 .RS
 .nf
 btest -c 192.168.88.1 -r -u -n
+.fi
+.RE
+.PP
+Bind the client to one interface on a multi-homed host:
+.PP
+.RS
+.nf
+btest -c 192.168.88.1 -r -i eth0
+btest -c 192.168.88.1 -t -r -u -i 10.0.0.5
 .fi
 .RE
 .SH PORTS
