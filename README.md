@@ -181,6 +181,10 @@ btest -c 192.168.88.1 -r -d 10 --csv results.csv -q
 
 # UDP through NAT
 btest -c 192.168.88.1 -r -u -n
+
+# Bind to one interface when the host has several
+btest -c 192.168.88.1 -r -i eth0
+btest -c 192.168.88.1 -r -i 10.0.0.5
 ```
 
 ### Debug logging
@@ -204,6 +208,7 @@ Options:
   -u, --udp                   Use UDP instead of TCP
   -b, --bandwidth <BW>        Target bandwidth limit (e.g., 100M, 1G, 500K)
   -P, --port <PORT>           Listen/connect port [default: 2000]
+  -i, --interface <IFACE>     Bind client sockets to an interface name or local address
       --listen <ADDR>         IPv4 listen address [default: 0.0.0.0] (use "none" to disable)
       --listen6 [<ADDR>]      Enable IPv6 listener [default: ::] (experimental)
   -a, --authuser <USER>       Authentication username

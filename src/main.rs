@@ -4,6 +4,7 @@ mod client;
 mod cpu;
 pub mod csv_output;
 mod ecsrp5;
+mod iface;
 mod protocol;
 mod server;
 pub mod syslog_logger;
@@ -51,6 +52,15 @@ struct Cli {
     /// Listen/connect port (default: 2000)
     #[arg(short = 'P', long = "port", default_value_t = BTEST_PORT)]
     port: u16,
+
+    /// Bind client sockets to this interface name or local address
+    #[arg(
+        short = 'i',
+        long = "interface",
+        requires = "client",
+        conflicts_with = "server"
+    )]
+    interface: Option<String>,
 
     /// Listen address for IPv4 (default: 0.0.0.0, use "none" to disable)
     #[arg(long = "listen", default_value = "0.0.0.0")]
@@ -120,21 +130,31 @@ async fn main() -> anyhow::Result<()> {
     // Initialize syslog if requested
     if let Some(ref syslog_addr) = cli.syslog {
         if let Err(e) = syslog_logger::init(syslog_addr) {
-            eprintln!("Warning: failed to initialize syslog to {}: {}", syslog_addr, e);
+            eprintln!(
+                "Warning: failed to initialize syslog to {}: {}",
+                syslog_addr, e
+            );
         }
     }
 
     // Initialize CSV output if requested
     if let Some(ref csv_path) = cli.csv {
         if let Err(e) = csv_output::init(csv_path) {
-            eprintln!("Warning: failed to initialize CSV output to {}: {}", csv_path, e);
+            eprintln!(
+                "Warning: failed to initialize CSV output to {}: {}",
+                csv_path, e
+            );
         }
     }
     csv_output::set_quiet(cli.quiet);
 
     if cli.server {
         // Server mode
-        let v4 = if cli.listen_addr.eq_ignore_ascii_case("none") { None } else { Some(cli.listen_addr) };
+        let v4 = if cli.listen_addr.eq_ignore_ascii_case("none") {
+            None
+        } else {
+            Some(cli.listen_addr)
+        };
         let v6 = cli.listen6_addr; // None unless --listen6 is passed
         tracing::info!("Starting btest server on port {}", cli.port);
         server::run_server(cli.port, cli.auth_user, cli.auth_pass, cli.ecsrp5, v4, v6).await?;
@@ -184,7 +204,7 @@ async fn main() -> anyhow::Result<()> {
 
         // Run client with optional duration timeout
         let start = std::time::Instant::now();
-        let client_fut = client::run_client(
+        let client_fut = client::run_client_bound(
             &host,
             cli.port,
             direction,
@@ -195,19 +215,21 @@ async fn main() -> anyhow::Result<()> {
             cli.auth_pass.clone(),
             cli.nat,
             shared_state.clone(),
+            cli.interface.as_deref(),
         );
 
         if cli.duration > 0 {
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(cli.duration),
-                client_fut,
-            )
-            .await
+            match tokio::time::timeout(std::time::Duration::from_secs(cli.duration), client_fut)
+                .await
             {
-                Ok(result) => { let _ = result?; },
+                Ok(result) => {
+                    let _ = result?;
+                }
                 Err(_) => {
                     // Timeout — signal stop
-                    shared_state.running.store(false, std::sync::atomic::Ordering::SeqCst);
+                    shared_state
+                        .running
+                        .store(false, std::sync::atomic::Ordering::SeqCst);
                 }
             }
         } else {
@@ -219,18 +241,29 @@ async fn main() -> anyhow::Result<()> {
 
         // Log test end to syslog
         syslog_logger::test_end(
-            &host, proto_str, dir_str,
-            total_tx, total_rx, total_lost, elapsed as u32,
+            &host,
+            proto_str,
+            dir_str,
+            total_tx,
+            total_rx,
+            total_lost,
+            elapsed as u32,
         );
 
         // Write CSV if enabled
         if csv_output::is_enabled() {
-            let auth_type = if cli.auth_user.is_some() { "auth" } else { "none" };
+            let auth_type = if cli.auth_user.is_some() {
+                "auth"
+            } else {
+                "none"
+            };
             let local_cpu = cpu::get();
-            let remote_cpu = shared_state.remote_cpu.load(std::sync::atomic::Ordering::Relaxed);
+            let remote_cpu = shared_state
+                .remote_cpu
+                .load(std::sync::atomic::Ordering::Relaxed);
             csv_output::write_result(
-                &host, cli.port, proto_str, dir_str,
-                elapsed, total_tx, total_rx, total_lost, local_cpu, remote_cpu, auth_type,
+                &host, cli.port, proto_str, dir_str, elapsed, total_tx, total_rx, total_lost,
+                local_cpu, remote_cpu, auth_type,
             );
         }
     } else {

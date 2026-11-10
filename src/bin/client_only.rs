@@ -9,7 +9,11 @@ use clap::Parser;
 use std::sync::atomic::Ordering;
 
 #[derive(Parser)]
-#[command(name = "btest-client", about = "MikroTik Bandwidth Test client", version)]
+#[command(
+    name = "btest-client",
+    about = "MikroTik Bandwidth Test client",
+    version
+)]
 struct Cli {
     /// Server address to connect to
     #[arg(short = 'c', long = "client", required = true)]
@@ -34,6 +38,10 @@ struct Cli {
     /// Port
     #[arg(short = 'P', long = "port", default_value_t = 2000)]
     port: u16,
+
+    /// Bind sockets to this interface name or local address
+    #[arg(short = 'i', long = "interface")]
+    interface: Option<String>,
 
     /// Username
     #[arg(short = 'a', long = "authuser")]
@@ -102,19 +110,25 @@ async fn main() -> anyhow::Result<()> {
     let state_clone = state.clone();
 
     let host = cli.host.clone();
-    let client_fut = btest_rs::client::run_client(
-        &host, cli.port, direction, cli.udp,
-        tx_speed, rx_speed,
-        cli.auth_user, cli.auth_pass, cli.nat,
+    let client_fut = btest_rs::client::run_client_bound(
+        &host,
+        cli.port,
+        direction,
+        cli.udp,
+        tx_speed,
+        rx_speed,
+        cli.auth_user,
+        cli.auth_pass,
+        cli.nat,
         state_clone,
+        cli.interface.as_deref(),
     );
 
     if cli.duration > 0 {
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(cli.duration),
-            client_fut,
-        ).await {
-            Ok(r) => { let _ = r?; }
+        match tokio::time::timeout(std::time::Duration::from_secs(cli.duration), client_fut).await {
+            Ok(r) => {
+                let _ = r?;
+            }
             Err(_) => {
                 state.running.store(false, Ordering::SeqCst);
             }

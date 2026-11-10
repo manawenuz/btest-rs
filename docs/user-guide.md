@@ -232,6 +232,18 @@ Suppresses per-second bandwidth output to the terminal. Useful for scripted or a
 btest -c 192.168.88.1 -r -P 3000
 ```
 
+### Choose an Interface
+
+When the machine has more than one interface, pass `-i` / `--interface` so the TCP control connection and the UDP data socket both use that interface. The value is an interface name or a local address on that interface:
+
+```bash
+btest -c 192.168.88.1 -r -i eth0
+btest -c 192.168.88.1 -r -i en0
+btest -c 192.168.88.1 -t -r -u -i 10.0.0.5
+```
+
+An interface name uses the first routable address of the destination's family on that interface. Link-local addresses are used only when the interface has no other address. Pass a specific local address to select one when the interface has several. On Linux, the socket is also pinned to the device (`SO_BINDTODEVICE`); that pin needs `CAP_NET_RAW`, and without it the client still binds the local address. On macOS the socket is pinned with `IP_BOUND_IF` / `IPV6_BOUND_IF`.
+
 ## Reading the Output
 
 ```
@@ -290,6 +302,12 @@ Options:
   -P, --port <PORT>
           TCP port to listen on (server mode) or connect to (client mode).
           [default: 2000]
+
+  -i, --interface <IFACE>
+          Bind client sockets to this interface. IFACE is an interface name
+          (eth0, en0) or a local address (10.0.0.5). The TCP control connection
+          and the UDP data socket both use it, so traffic leaves the chosen
+          interface when the host has more than one. Requires -c.
 
       --listen <ADDR>
           IPv4 address to bind the server listener to. Use "none" to disable

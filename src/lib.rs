@@ -4,6 +4,7 @@ pub mod client;
 pub mod cpu;
 pub mod csv_output;
 pub mod ecsrp5;
+mod iface;
 pub mod protocol;
 pub mod server;
 pub mod syslog_logger;
